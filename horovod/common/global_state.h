@@ -116,6 +116,9 @@ struct HorovodGlobalState {
   // name) and time point when tensor started allreduce op.
   std::unique_ptr<MessageTable> message_table;
 
+  // Quantization bits parameter for the underlying quantization. Can be 1, 2, 4, 8 and 32
+  int quantization_bits;
+
   ~HorovodGlobalState() {
     // Make sure that the destructor of the background thread is safe to
     // call. If a thread is still joinable (not detached or complete) its

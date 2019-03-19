@@ -42,6 +42,9 @@
 #if HAVE_CUDA
 #include "ops/cuda_operations.h"
 #include "ops/mpi_cuda_operations.h"
+  #if QUANTIZATION
+#include "ops/mpi_quantized_cuda_operations.h"
+  #endif
 #endif
 
 #if HAVE_NCCL
@@ -132,8 +135,11 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 
 #if HAVE_CUDA
 #if HOROVOD_GPU_ALLREDUCE == 'M'
+  #if QUANTIZATION
+  allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_Quantized_CUDAAllreduce(&mpi_context, &cuda_context, &state)));
+  #else
   allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_CUDAAllreduce(&mpi_context, &cuda_context, &state)));
-
+  #endif
 #else
   #if HAVE_NCCL && HOROVOD_GPU_ALLREDUCE == 'N'
     allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
@@ -1304,7 +1310,7 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
 
 // Start Horovod background thread. Ensure that this is
 // only done once no matter how many times this function is called.
-void InitializeHorovodOnce(const int* ranks, int nranks) {
+void InitializeHorovodOnce(int quantization_bits, const int* ranks, int nranks) {
   // Ensure background thread is only started once.
   if (!horovod_global.initialize_flag.test_and_set()) {
     for (int i = 0; i < nranks; ++i) {
@@ -1317,6 +1323,7 @@ void InitializeHorovodOnce(const int* ranks, int nranks) {
     horovod_global.background_thread =
         std::thread(BackgroundThreadLoop, std::ref(horovod_global), std::ref(mpi_context));
   }
+  horovod_global.quantization_bits = quantization_bits;
 
   // Wait to ensure that the background thread has finished initializing MPI.
   while (!horovod_global.initialization_done) {
@@ -1335,13 +1342,13 @@ Status CheckInitialized() {
 
 extern "C" {
 
-void horovod_init(const int* ranks, int nranks) {
-  InitializeHorovodOnce(ranks, nranks);
+void horovod_init(int quantization_bits, const int* ranks, int nranks) {
+  InitializeHorovodOnce(quantization_bits, ranks, nranks);
 }
 
-void horovod_init_comm(MPI_Comm comm) {
+void horovod_init_comm(int quantization_bits, MPI_Comm comm) {
   MPI_Comm_dup(comm, &(mpi_context.mpi_comm));
-  InitializeHorovodOnce(NULL, 0);
+  InitializeHorovodOnce(quantization_bits, NULL, 0);
 }
 
 void horovod_shutdown() {

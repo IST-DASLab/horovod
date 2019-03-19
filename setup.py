@@ -499,6 +499,8 @@ def get_common_options(build_ext):
         raise DistutilsError('HOROVOD_GPU_BROADCAST=%s is invalid, supported '
                              'values are "", "MPI".' % gpu_broadcast)
 
+    quantization = os.environ.get('HOROVOD_QUANTIZATION')
+
     if gpu_allreduce or gpu_allgather or gpu_broadcast:
         have_cuda = True
         cuda_include_dirs, cuda_lib_dirs = get_cuda_dirs(build_ext, cpp_flags)
@@ -572,6 +574,11 @@ def get_common_options(build_ext):
         LIBRARY_DIRS += cuda_lib_dirs
         LIBRARIES += ['cudart']
 
+    if have_cuda and quantization:
+        MACROS += [('QUANTIZATION', '1')]
+        SOURCES += ['horovod/common/ops/mpi_quantized_cuda_operations.cc']
+        SOURCES += ['horovod/common/ops/cuda_functions.cu.cc']
+
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
         INCLUDES += nccl_include_dirs
@@ -604,10 +611,47 @@ def get_common_options(build_ext):
                 LIBRARIES=LIBRARIES)
 
 
+def customize_compiler_for_nvcc(self):
+    """inject deep into distutils to customize how the dispatch
+    to gcc/nvcc works.
+    If you subclass UnixCCompiler, it's not trivial to get your subclass
+    injected in, and still have the right customizations (i.e.
+    distutils.sysconfig.customize_compiler) run on it. So instead of going
+    the OO route, I have this. Note, it's kindof like a wierd functional
+    subclassing going on."""
+
+    # tell the compiler it can processes .cu
+    self.src_extensions.append('.cu')
+
+    # save references to the default compiler_so and _comple methods
+    default_compiler_so = self.compiler_so
+    super = self._compile
+
+    def _compile(obj, src, ext, cc_args, extra_postargs, pp_opts):
+        if os.path.split(src)[1] == 'cuda_functions.cu.cc':
+            # use the cuda for .cu files
+#            self.set_executable('compiler_so', ['/usr/local/cuda/9.0/bin/nvcc'])
+            self.set_executable('compiler_so', ['/usr/local/cuda-9.0/bin/nvcc'])
+            # use only a subset of the extra_postargs, which are 1-1 translated
+            # from the extra_compile_args in the Extension class
+            postargs = ['-c', '-std=c++11', '-x=cu', '-arch=sm_37',
+                        '--ptxas-options=-v', '--compiler-options','-fPIC'] + extra_postargs[13:]
+        else:
+            postargs = extra_postargs
+        print('POSTARGS', postargs)
+        super(obj, src, ext, cc_args, postargs, pp_opts)
+        # reset the default compiler_so, which we might have changed for cuda
+        self.compiler_so = default_compiler_so
+
+    # inject our redefined _compile method into the class
+    self._compile = _compile
+
+
 def build_tf_extension(build_ext, options):
     check_tf_version()
     tf_compile_flags, tf_link_flags = get_tf_flags(
         build_ext, options['COMPILE_FLAGS'])
+    print("TF_COMPILE_FLAGS", tf_compile_flags)
 
     tensorflow_mpi_lib.define_macros = options['MACROS']
     tensorflow_mpi_lib.include_dirs = options['INCLUDES']
@@ -619,12 +663,12 @@ def build_tf_extension(build_ext, options):
     tensorflow_mpi_lib.library_dirs = options['LIBRARY_DIRS']
     tensorflow_mpi_lib.libraries = options['LIBRARIES']
 
+    customize_compiler_for_nvcc(build_ext.compiler)
+
     build_ext.build_extension(tensorflow_mpi_lib)
 
 
 def parse_version(version_str):
-    if "dev" in version_str:
-        return 9999999999
     m = re.match('^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?', version_str)
     if m is None:
         return None
@@ -899,6 +943,9 @@ def build_torch_extension_v2(build_ext, options, torch_version):
 class custom_build_ext(build_ext):
     def build_extensions(self):
         options = get_common_options(self)
+        print("HOROVOD_WITHOUT_PYTORCH", not os.environ.get('HOROVOD_WITHOUT_PYTORCH'))
+        print("HOROVOD_WITHOUT_TENSORFLOW", not os.environ.get('HOROVOD_WITHOUT_TENSORFLOW'))
+        print("HOROVOD_WITHOUT_MXNET", not os.environ.get('HOROVOD_WITHOUT_MXNET'))
         built_plugins = []
         # If PyTorch is installed, it must be imported before TensorFlow, otherwise
         # we may get an error: dlopen: cannot load any more object with static TLS
@@ -970,5 +1017,4 @@ setup(name='horovod',
       # so it's only necessary for `build*` or `bdist*` actions.
       setup_requires=['cffi>=1.4.0', 'cloudpickle', 'psutil', 'six'] if is_build_action() else [],
       install_requires=['cffi>=1.4.0', 'cloudpickle', 'psutil', 'six'],
-      zip_safe=False,
-      scripts=['bin/horovodrun'])
+      zip_safe=False)

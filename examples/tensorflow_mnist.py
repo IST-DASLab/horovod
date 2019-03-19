@@ -14,6 +14,10 @@
 # ==============================================================================
 #!/usr/bin/env python
 
+import argparse
+
+import time
+
 import os
 import errno
 import tensorflow as tf
@@ -79,7 +83,12 @@ def train_input_generator(x_train, y_train, batch_size=64):
 
 def main(_):
     # Horovod: initialize Horovod.
-    hvd.init()
+    parser = argparse.ArgumentParser(description='Tensorflow MNIST Example')
+    parser.add_argument('--quantization-bits', type=int, default=8,
+                        help='The number of bits per value in quantization')
+    args = parser.parse_args()
+
+    hvd.init(args.quantization_bits)
 
     # Keras automatically creates a cache directory in ~/.keras/datasets for
     # storing the downloaded MNIST data. This creates a race
@@ -129,7 +138,7 @@ def main(_):
         hvd.BroadcastGlobalVariablesHook(0),
 
         # Horovod: adjust number of steps based on number of GPUs.
-        tf.train.StopAtStepHook(last_step=20000 // hvd.size()),
+        tf.train.StopAtStepHook(last_step=2000 // hvd.size()),
 
         tf.train.LoggingTensorHook(tensors={'step': global_step, 'loss': loss},
                                    every_n_iter=10),
@@ -145,6 +154,8 @@ def main(_):
     checkpoint_dir = './checkpoints' if hvd.rank() == 0 else None
     training_batch_generator = train_input_generator(x_train,
                                                      y_train, batch_size=100)
+
+    start = time.time()
     # The MonitoredTrainingSession takes care of session initialization,
     # restoring from a checkpoint, saving to a checkpoint, and closing when done
     # or an error occurs.
@@ -155,7 +166,8 @@ def main(_):
             # Run a training step synchronously.
             image_, label_ = next(training_batch_generator)
             mon_sess.run(train_op, feed_dict={image: image_, label: label_})
-
+    end = time.time()
+    print(end - start)
 
 if __name__ == "__main__":
     tf.app.run()
