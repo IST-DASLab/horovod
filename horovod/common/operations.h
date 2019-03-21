@@ -74,6 +74,14 @@ int horovod_local_size();
 // C interface to return flag indicating whether MPI multi-threading is
 // supported. Returns -1 if Horovod is not initialized.
 int horovod_mpi_threads_supported();
+
+// C interface to return the time spent in nanoseconds on allreduce
+// Returns 0 if Horovod is not initialized
+int64_t horovod_allreduce_time();
+
+// C interface to return the time spent in nanoseconds onto the communication
+// Returns 0 if Horovod is not initialized.
+int64_t horovod_communication_time();
 }
 
 Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,

@@ -26,6 +26,7 @@ MPI_CUDAAllreduce::MPI_CUDAAllreduce(MPIContext* mpi_context,
       mpi_context_(mpi_context) {}
 
 Status MPI_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
+  auto start = now();
   auto& first_entry = entries[0];
 
   InitCUDA(entries);
@@ -54,11 +55,14 @@ Status MPI_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries, const 
   timeline.ActivityStartAll(entries, MPI_ALLREDUCE);
   const void* sendbuf = entries.size() > 1 || first_entry.tensor->data() == first_entry.output->data()
                         ? MPI_IN_PLACE : first_entry.tensor->data();
+  auto mpi_start = now();
   int op = MPI_Allreduce(sendbuf, buffer_data,
                          (int) num_elements,
                          mpi_context_->GetMPIDataType(first_entry.tensor),
                          mpi_context_->GetMPISumOp(first_entry.tensor->dtype()),
                          mpi_context_->GetMPICommunicator(Communicator::GLOBAL));
+  auto mpi_end = now();
+  global_state_->communication_time += mpi_end - mpi_start;
   if (op != MPI_SUCCESS) {
     throw std::logic_error("MPI_Allreduce failed, see MPI output for details.");
   }
@@ -74,6 +78,9 @@ Status MPI_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries, const 
 
     timeline.ActivityEndAll(entries);
   }
+
+  auto end = now();
+  global_state_->allreduce_time += end - start;
 
   return Status::OK();
 }

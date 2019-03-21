@@ -186,9 +186,9 @@ curandState* GPU_init_curand(int n, unsigned int seed, cudaStream_t stream) {
 }
 
 void GPU_add(int n, float* x, float* y, cudaStream_t stream) {
-    int blocksPerGrid = (int) ceil(1.0 * n / maxThreadsPerBlock);
-    _add<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(n, x, y);
-    cudaStreamSynchronize(stream);	    
+  int blocksPerGrid = (int) ceil(1.0 * n / maxThreadsPerBlock);
+  _add<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(n, x, y);
+  cudaStreamSynchronize(stream);	    
 }
 
 void GPU_find_max_and_min_bucket(float* x, float* maxandmin, int n, int bucket_size, cudaStream_t stream) {

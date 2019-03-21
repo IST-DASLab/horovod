@@ -119,6 +119,12 @@ struct HorovodGlobalState {
   // Quantization bits parameter for the underlying quantization. Can be 1, 2, 4, 8 and 32
   int quantization_bits;
 
+  // Allreduce time field
+  int64_t allreduce_time = 0;
+
+  // Communication time field
+  int64_t communication_time = 0;
+
   ~HorovodGlobalState() {
     // Make sure that the destructor of the background thread is safe to
     // call. If a thread is still joinable (not detached or complete) its

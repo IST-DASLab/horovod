@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <sys/time.h>
 
 #include "message.h"
 
@@ -182,6 +183,10 @@ struct TensorTableEntry {
   StatusCallback callback;
 };
 using TensorTable = std::unordered_map<std::string, TensorTableEntry>;
+
+// Returns current running time in nanoseconds
+int64_t now();
+
 
 } // namespace common
 } // namespace horovod

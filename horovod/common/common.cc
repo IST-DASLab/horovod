@@ -109,5 +109,11 @@ int64_t TensorShape::num_elements() const {
   return result;
 }
 
+int64_t now() {
+  struct timespec t;
+  clock_gettime(CLOCK_REALTIME, &t);
+  return t.tv_sec * 1000000000LL + t.tv_nsec;
+}
+
 } // namespace common
 } // namespace horovod

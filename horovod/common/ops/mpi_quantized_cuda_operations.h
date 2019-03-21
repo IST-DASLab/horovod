@@ -39,8 +39,8 @@ protected:
   MPIContext* mpi_context_;
 
 private:
-  float *dequan_buffer;
-  curandState* cuda_states;
+  float* dequan_buffer = nullptr;
+  curandState* cuda_states = nullptr;
   std::vector<float*> maxandmin_send;
   std::vector<float*> maxandmin_recv;
   std::vector<unsigned char*> quantized_gradients;

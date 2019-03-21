@@ -43,6 +43,7 @@ Status MPIAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Respo
 
   // Do allreduce.
   timeline.ActivityStartAll(entries, MPI_ALLREDUCE);
+  auto start = now();
   const void* sendbuf = entries.size() > 1 || first_entry.tensor->data() == first_entry.output->data()
                         ? MPI_IN_PLACE : first_entry.tensor->data();
   int op = MPI_Allreduce(sendbuf, buffer_data,
@@ -53,6 +54,8 @@ Status MPIAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Respo
   if (op != MPI_SUCCESS) {
     throw std::logic_error("MPI_Allreduce failed, see MPI output for details.");
   }
+  auto end = now();
+  //global_state_->communication_time += end - start;
   timeline.ActivityEndAll(entries);
 
   // Copy memory out of the fusion buffer.
@@ -139,6 +142,7 @@ Status MPIAllgather::Execute(std::vector<TensorTableEntry>& entries, const Respo
 
   global_state_->timeline.ActivityStartAll(entries, MPI_ALLGATHER);
   auto dtype = mpi_context_->GetMPIDataType(first_entry.tensor->dtype());
+  auto start = now();
   int op = MPI_Allgatherv(sendbuf != nullptr ? sendbuf : MPI_IN_PLACE,
                           (int) total_num_elements,
                           dtype,
@@ -150,6 +154,8 @@ Status MPIAllgather::Execute(std::vector<TensorTableEntry>& entries, const Respo
   if (op != MPI_SUCCESS) {
     throw std::logic_error("MPI_Allgatherv failed, see MPI output for details.");
   }
+  auto end = now();
+  //global_state_->communication_time += end - start;
   global_state_->timeline.ActivityEndAll(entries);
 
   if (entries.size() > 1) {
@@ -344,6 +350,7 @@ Status MPIBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Respo
   }
 
   global_state_->timeline.ActivityStartAll(entries, MPI_BCAST);
+  auto start = now();
   int op = MPI_Bcast(data_ptr,
                      (int) e.tensor->shape().num_elements(),
                      mpi_context_->GetMPIDataType(e.tensor->dtype()),
@@ -352,6 +359,8 @@ Status MPIBroadcast::Execute(std::vector<TensorTableEntry>& entries, const Respo
   if (op != MPI_SUCCESS) {
     throw std::logic_error("MPI_Broadcast failed, see MPI output for details.");
   }
+  auto end = now();
+  //global_state_->communication_time += end - start;
   global_state_->timeline.ActivityEndAll(entries);
 
   return Status::OK();

@@ -1395,6 +1395,20 @@ int horovod_mpi_threads_supported() {
   }
   return horovod_global.mpi_threads_supported ? 1 : 0;
 }
+
+int64_t horovod_allreduce_time() {
+  if (!horovod_global.initialization_done) {
+    return 0;
+  }
+  return horovod_global.allreduce_time;
+}
+
+int64_t horovod_communication_time() {
+  if (!horovod_global.initialization_done) {
+    return 0;
+  }
+  return horovod_global.communication_time;
+}
 }
 
 // MPI must be initialized and the background thread must be running before

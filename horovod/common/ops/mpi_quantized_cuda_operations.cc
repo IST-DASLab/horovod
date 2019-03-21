@@ -30,6 +30,8 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
 //  std::cerr << "Quantized All reduce\n";
 
   //printf("%d\n", global_state_->quantization_bits);
+  auto start = now();
+  //printf("Communication at start %lld\n", global_state_->allreduce_time);
 
   InitCUDA(entries);
 
@@ -58,11 +60,14 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     timeline.ActivityStartAll(entries, MPI_ALLREDUCE);
     const void* sendbuf = entries.size() > 1 || first_entry.tensor->data() == first_entry.output->data()
                           ? MPI_IN_PLACE : first_entry.tensor->data();
+    auto mpi_start = now();
     int op = MPI_Allreduce(sendbuf, buffer_data,
                            (int) num_elements,
                            mpi_context_->GetMPIDataType(first_entry.tensor),
                            mpi_context_->GetMPISumOp(first_entry.tensor->dtype()),
                            mpi_context_->GetMPICommunicator(Communicator::GLOBAL));
+    auto mpi_end = now();
+    global_state_->communication_time += mpi_end - mpi_start;
     if (op != MPI_SUCCESS) {
       throw std::logic_error("MPI_Allreduce failed, see MPI output for details.");
     }
@@ -78,6 +83,8 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
 
       timeline.ActivityEndAll(entries);
     }
+    auto end = now();
+    global_state_->allreduce_time += end - start;
 
     return Status::OK();
   }
@@ -134,6 +141,13 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
 //  }
 
   //printf("Entries %d\n", entries.size());
+//  int64_t sum_size = 0;
+//  for (auto entry : entries) {
+//    sum_size += entry.output->size();
+//  }
+
+//  if (sum_size > tensor_fusion_threshold)
+//    printf("Size: %d, threshold: %d\n", sum_size, tensor_fusion_threshold);
          
   void* buffer_data;
   size_t buffer_len;
@@ -143,7 +157,9 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
   if (entries.size() > 1) {
     timeline.ActivityStartAll(entries, MEMCPY_IN_FUSION_BUFFER);
     const void* fused_input_data;
+    //printf("Start MemcpyInFusionBuffer\n");
     MemcpyInFusionBuffer(entries, fused_input_data, buffer_data, buffer_len);
+    //printf("End MemcpyInFusionBuffer\n");
 
     auto cuda_result = cudaStreamSynchronize(cuda_context_->streams[first_entry.device]);
     cuda_context_->ErrorCheck("cudaStreamSynchronize", cuda_result);
@@ -184,16 +200,6 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       //get start offset and length of this chunk
       int start_offset = (num_elems_per_node * i) + std::min(residue, i);
       int length = num_elems_per_node + ((i < residue) ? 1 : 0);
-      int nb = (length + bucket_size - 1) / bucket_size;
-
-      request_reduce.push_back(MPI_Request());
-      MPI_Irecv(quantized_gradients_recv[counter1], (num_elems + entries_per_byte - 1) / entries_per_byte,
-        MPI_UNSIGNED_CHAR, i, 0,
-        MPI_COMM_WORLD, &request_reduce.back());
-
-      request_reduce.push_back(MPI_Request());
-      MPI_Irecv(maxandmin_recv[counter1], num_buckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
-        i, 0, MPI_COMM_WORLD, &request_reduce.back());
 
       //find max and min of this chunk
       GPU_find_max_and_min_bucket((float*)buffer_data + division_offset + start_offset, maxandmin_send[counter1], 
@@ -205,6 +211,25 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       GPU_quantize_value_bits(quantized_gradients[counter1], (float*)buffer_data + division_offset + start_offset, 
         maxandmin_send[counter1], length, bits, bucket_size, cuda_states, cuda_context_->streams[first_entry.device]);
       //printf("Quantize values\n");
+    }
+
+    auto mpi_start = now();
+    for (int i = 0; i < num_nodes; i++) {
+      if (i == rank) { //for each node(chunk)
+        continue;
+      }
+      //get length of this chunk
+      int length = num_elems_per_node + ((i < residue) ? 1 : 0);
+      int nb = (length + bucket_size - 1) / bucket_size;
+
+      request_reduce.push_back(MPI_Request());
+      MPI_Irecv(quantized_gradients_recv[counter1], (num_elems + entries_per_byte - 1) / entries_per_byte,
+        MPI_UNSIGNED_CHAR, i, 0,
+        MPI_COMM_WORLD, &request_reduce.back());
+
+      request_reduce.push_back(MPI_Request());
+      MPI_Irecv(maxandmin_recv[counter1], num_buckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+        i, 0, MPI_COMM_WORLD, &request_reduce.back());
 
       request_reduce.push_back(MPI_Request());
       MPI_Isend(quantized_gradients[counter1], (length + entries_per_byte - 1) / entries_per_byte, 
@@ -219,6 +244,8 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     }
 
     MPI_Waitall((int)request_reduce.size(), &request_reduce[0], MPI_STATUSES_IGNORE);
+    auto mpi_end = now();
+    global_state_->communication_time += mpi_end - mpi_start;
     //printf("First phase is finished\n");
 
     for (int i = 0; i < num_nodes - 1; i++) {
@@ -250,6 +277,7 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     //printf("Dequantization and quantization of the sum\n");
 
     //second round of MPI communication. receive the sums from other nodes
+    mpi_start = now();
     int counter2 = 0;
     std::vector<MPI_Request> request_gather;
     for (int i = 0; i < num_nodes; i++) {
@@ -279,6 +307,8 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     }
 
     MPI_Waitall((int)request_gather.size(), &request_gather[0], MPI_STATUSES_IGNORE);
+    mpi_end = now();
+    global_state_->communication_time += mpi_end - mpi_start;
     //printf("Second phase is finished\n");
 
     //dequantization
@@ -328,6 +358,13 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     }
   }
 
+  //printf("Communication at end %lld\n", global_state_->allreduce_time);
+  auto end = now();
+  auto elapsed = end - start;
+  //printf("end-start %lld\n", elapsed);
+  //printf("globalstate communication time %lld\n", global_state_->allreduce_time);
+  global_state_->allreduce_time += elapsed;
+  //printf("Communication at end 2 %lld\n", global_state_->allreduce_time);
   //printf("After\n");
 //  for (auto entry : entries) {
 //    GPU_print((float*)entry.output->data(), entry.output->size() / sizeof(float), cuda_context_->streams[first_entry.device]);
