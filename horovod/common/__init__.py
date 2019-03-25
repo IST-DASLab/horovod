@@ -153,3 +153,11 @@ class HorovodBasics(object):
             raise ValueError(
                 'Horovod has not been initialized; use hvd.init().')
         return bool(mpi_threads_supported)
+
+    def allreduce_time(self):
+        self.MPI_LIB_CTYPES.horovod_allreduce_time.restype = ctypes.c_longlong
+        return self.MPI_LIB_CTYPES.horovod_allreduce_time()
+
+    def communication_time(self):
+        self.MPI_LIB_CTYPES.horovod_communication_time.restype = ctypes.c_longlong
+        return self.MPI_LIB_CTYPES.horovod_communication_time()

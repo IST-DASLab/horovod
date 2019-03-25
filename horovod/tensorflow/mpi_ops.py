@@ -68,7 +68,8 @@ local_size = _basics.local_size
 rank = _basics.rank
 local_rank = _basics.local_rank
 mpi_threads_supported = _basics.mpi_threads_supported
-
+allreduce_time = _basics.allreduce_time
+communication_time = _basics.communication_time
 
 def _normalize_name(name):
     """Normalizes operation name to TensorFlow rules."""

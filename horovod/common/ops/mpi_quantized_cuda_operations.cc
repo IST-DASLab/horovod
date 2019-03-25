@@ -130,6 +130,7 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       quantized_gradients_recv.push_back(quantized_gradients_per_node_recv);
     }
     //printf("Allocation is successful\n");
+    //printf("%d\n", dequan_buffer);
     //printf("Num nodes %d\n", num_nodes);
     //printf("max and min size: %d\n", (int)ceil(1.0 * chunk_size / (bucket_size * sizeof(float))) * 2 * sizeof(float));
     //printf("quantized gradients size: %d\n", (int)ceil(1.0 * chunk_size * bits / 32));
@@ -275,6 +276,7 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
 //    GPU_copy_value((float*)buffer_data + division_offset + start_elem, dequan_buffer, num_elems, 
 //      cuda_context_->streams[first_entry.device]);
     //printf("Dequantization and quantization of the sum\n");
+//    printf("Copied with %d result\n", cuda_result);
 
     //second round of MPI communication. receive the sums from other nodes
     mpi_start = now();

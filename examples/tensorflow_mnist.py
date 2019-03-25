@@ -168,6 +168,8 @@ def main(_):
             mon_sess.run(train_op, feed_dict={image: image_, label: label_})
     end = time.time()
     print(end - start)
+    print("Allreduce time %f" % (hvd.allreduce_time() / 1000000000))
+    print("Total communication time %f" % (hvd.communication_time() / 1000000000));
 
 if __name__ == "__main__":
     tf.app.run()

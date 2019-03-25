@@ -39,6 +39,7 @@ from horovod.tensorflow.mpi_ops import allgather, broadcast, _allreduce
 from horovod.tensorflow.mpi_ops import init, shutdown
 from horovod.tensorflow.mpi_ops import size, local_size, rank, local_rank
 from horovod.tensorflow.mpi_ops import mpi_threads_supported
+from horovod.tensorflow.mpi_ops import allreduce_time, communication_time
 from horovod.tensorflow.util import _executing_eagerly
 
 import tensorflow as tf
