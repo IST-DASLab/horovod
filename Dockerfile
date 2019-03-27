@@ -8,7 +8,7 @@ ENV NCCL_VERSION=2.3.7-1+cuda9.0
 ENV MXNET_URL=https://s3-us-west-2.amazonaws.com/mxnet-python-packages-gcc5/mxnet_cu90_gcc5-1.4.0-py2.py3-none-manylinux1_x86_64.whl
 
 # Python 2.7 or 3.5 is supported by Ubuntu Xenial out of the box
-ARG python=2.7
+ARG python=3.5
 ENV PYTHON_VERSION=${python}
 
 RUN apt-get update && apt-get install -y --allow-downgrades --allow-change-held-packages --no-install-recommends \
@@ -42,7 +42,7 @@ RUN mkdir /tmp/openmpi && \
     wget https://www.open-mpi.org/software/ompi/v3.1/downloads/openmpi-4.0.0.tar.gz && \
     tar zxf openmpi-4.0.0.tar.gz && \
     cd openmpi-4.0.0 && \
-    ./configure --enable-orterun-prefix-by-default && \
+    ./configure --enable-orterun-prefix-by-default --with-cuda=/usr/local/cuda-9.0 && \
     make -j $(nproc) all && \
     make install && \
     ldconfig && \
