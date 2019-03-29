@@ -63,6 +63,24 @@ $ mpirun --allow-run-as-root -np 2 -H localhost:2 python examples/tensorflow_mni
 
 This will run the code on two GPUs.
 
+## Execution guide on das8gpu1
+
+At first, you have to load module horovod/0.16.0f with all necessary requirements.
+
+```bash
+module load horovod/0.16.0f
+```
+
+Then you have to build the new virtual environment for python.
+
+```bash
+python3 -m venv ~/horovod-venv/
+source ~/horovod-venv/bin/activate
+pip install tensorflow==1.12.0 tensorflow-gpu==1.12.0
+```
+
+Now, you are ready to build horovod as explained in the previous section.
+
 ## More experiments
 
 You can decide to run the code on cifar-10 or imagenet.
