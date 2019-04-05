@@ -212,9 +212,11 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       GPU_quantize_value_bits(quantized_gradients[counter1], (float*)buffer_data + division_offset + start_offset, 
         maxandmin_send[counter1], length, bits, bucket_size, cuda_states, cuda_context_->streams[first_entry.device]);
       //printf("Quantize values\n");
+      counter1++;
     }
 
     auto mpi_start = now();
+    counter1 = 0;
     for (int i = 0; i < num_nodes; i++) {
       if (i == rank) { //for each node(chunk)
         continue;
