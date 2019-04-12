@@ -16,4 +16,9 @@ void GPU_copy_value(float* x, float* y, int n, cudaStream_t stream);
 void GPU_print(float* x, int n, cudaStream_t stream);
 
 
+void GPUFindMaxAndMin(float *array, float *maxandmin, int n, cudaStream_t stream);
+void GPUQuantizeValue(unsigned char *x, float *y, float *maxandmin, int n, curandState* states, cudaStream_t stream);
+void GPUDequantizeValue(unsigned char *recv, float *maxandmin, float *x, int n, cudaStream_t stream);
+
+
 #endif //CUDA_FUNCTIONS_H_

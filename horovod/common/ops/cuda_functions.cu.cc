@@ -174,6 +174,96 @@ __global__ void _print(float* x, int n) {
   }
 }
 
+__global__ void _findMaxAndMin(float *array, float *maxandmin, int n)
+{
+    unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+    unsigned int stride = gridDim.x * blockDim.x;
+
+    __shared__ float cache1[maxThreadsPerBlock];
+    __shared__ float cache2[maxThreadsPerBlock];
+
+    for(int j = index; j < n; j += stride)
+    {
+
+        int my_bucket = j / 512;
+        int index_in_bucket = j % 512;
+        int offset = (my_bucket&1) ? 512 : 0;
+
+        // reduction
+        unsigned int i = 512 / 2;
+        while(i != 0)
+        {
+            if(index_in_bucket < i)
+            {
+
+                if(i == 512 / 2) //get data in cache in first loop
+                {
+                    cache1[index_in_bucket + offset] = fmaxf(array[j], array[j + i]);
+                    cache2[index_in_bucket + offset] = fminf(array[j], array[j + i]);                 
+                }
+                else
+                {
+                    cache1[index_in_bucket + offset] = fmaxf(cache1[index_in_bucket + offset], cache1[index_in_bucket + offset + i]);
+                    cache2[index_in_bucket + offset] = fminf(cache2[index_in_bucket + offset], cache2[index_in_bucket + offset + i]);  
+                }
+
+            }
+            __syncthreads();
+            i /= 2;
+        }
+
+        
+
+        if(threadIdx.x == 0)
+        {
+            maxandmin[2 * my_bucket] = cache1[0];
+            maxandmin[2 * my_bucket + 1] = cache2[0];
+        }
+        else if(threadIdx.x == 512)
+        {
+            maxandmin[2 * my_bucket] = cache1[512];
+            maxandmin[2 * my_bucket + 1] = cache2[512];
+        }
+    }
+
+}
+
+__global__ void _quantizeValue(unsigned char *x, const float *y, const float *maxandmin, const int n, curandState* states)
+{
+    unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+    unsigned int stride = gridDim.x * blockDim.x;
+
+    curandState local_state;
+    local_state = states[index];
+
+
+    for (int i = index; i < n; i += stride)
+    {
+        int my_bucket = i / 512;
+        float unit = (maxandmin[my_bucket * 2] - maxandmin[my_bucket * 2 + 1]) / 255.0;
+        float d = (y[i] - maxandmin[my_bucket * 2 + 1]) / unit + (curand(&local_state)%1000001 / 1000000.0); 
+        x[i] = (unsigned char) floor(d);
+    }
+    states[index] = local_state;       
+}
+
+
+
+
+__global__ void _dequantizeValue(unsigned char *recv, float *maxandmin, float *x, const int n)
+{
+    unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+    unsigned int stride = gridDim.x * blockDim.x;
+
+    for (int i = index; i < n; i += stride)
+    {
+        int my_bucket = i / 512;
+        float unit = (maxandmin[my_bucket * 2] - maxandmin[my_bucket * 2 + 1]) / 255.0;
+        x[i] = maxandmin[my_bucket * 2 + 1] + recv[i] * unit;  
+    }          
+}
+
+
 curandState* GPU_init_curand(int n, unsigned int seed, cudaStream_t stream) {
   curandState* states;
 
@@ -219,4 +309,28 @@ void GPU_copy_value(float* x, float* y, int n, cudaStream_t stream) {
 void GPU_print(float* x, int n, cudaStream_t stream) {
   _print<<<1, 1, 0, stream>>>(x, n);
   cudaStreamSynchronize(stream);
+}
+
+
+void GPUFindMaxAndMin(float *array, float *maxandmin, int n, cudaStream_t stream)
+{
+    int blocksPerGrid = (int) ceil(1.0 * n / maxThreadsPerBlock);
+    _findMaxAndMin<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(array, maxandmin, n);
+    cudaStreamSynchronize(stream); 
+}
+
+void GPUQuantizeValue(unsigned char *x, float *y, float *maxandmin, int n, curandState* states, cudaStream_t stream)
+{
+    int blocksPerGrid = (int) ceil(1.0 * n / maxThreadsPerBlock);
+    _quantizeValue<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(x, y, maxandmin, n, states);
+    cudaStreamSynchronize(stream);
+    
+}
+
+void GPUDequantizeValue(unsigned char *recv, float *maxandmin, float *x, int n, cudaStream_t stream)
+{
+    int blocksPerGrid = (int) ceil(1.0 * n / maxThreadsPerBlock);
+    _dequantizeValue<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(recv, maxandmin, x, n);
+    cudaStreamSynchronize(stream);
+    
 }

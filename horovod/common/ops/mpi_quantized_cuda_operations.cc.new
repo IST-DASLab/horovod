@@ -91,9 +91,9 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
 
 //  MPI_Datatype dtype;
   
-  int rank, numNodes;
+  int rank, num_nodes;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &numNodes);
+  MPI_Comm_size(MPI_COMM_WORLD, &num_nodes);
 
   int64_t tensor_fusion_threshold = global_state_->param_manager.TensorFusionThresholdBytes();
 //  std::cerr << rank << " " << num_nodes << " " << tensor_fusion_threshold << std::endl;
@@ -103,13 +103,13 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
   int bucket_size = 512; // the size of the bucket, should be the power of two and does not exceed 1024
   int entries_per_byte = 8 / bits;
   int64_t num_elements = NumElements(entries);
-  int64_t chunk_size = (int64_t) ceil(1.0 * tensor_fusion_threshold / numNodes);
+  int64_t chunk_size = (int64_t) ceil(1.0 * tensor_fusion_threshold / num_nodes);
 
   if (dequan_buffer == nullptr) {
     //printf("Dequan buffer is null and its size %d\n", chunk_size);
     cudaMalloc(&dequan_buffer, chunk_size);
     cuda_states = GPU_init_curand(ceil((double)chunk_size / sizeof(float)), time(NULL), cuda_context_->streams[first_entry.device]);
-    for (int i = 0; i < numNodes - 1; i++) {
+    for (int i = 0; i < num_nodes - 1; i++) {
       // allocate memory for this chunk. We partition the entire gradients into N chunks, where N is the number of MPI nodes.
       float* maxandmin_per_node;
       float* maxandmin_per_node_recv; 
@@ -136,6 +136,20 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     //printf("quantized gradients size: %d\n", (int)ceil(1.0 * chunk_size * bits / 32));
   }
 
+  //printf("Before\n");
+//  for (auto entry : entries) {
+    //GPU_print((float*)entry.output->data(), entry.output->size() / sizeof(float), cuda_context_->streams[first_entry.device]);
+//  }
+
+  //printf("Entries %d\n", entries.size());
+//  int64_t sum_size = 0;
+//  for (auto entry : entries) {
+//    sum_size += entry.output->size();
+//  }
+
+//  if (sum_size > tensor_fusion_threshold)
+//    printf("Size: %d, threshold: %d\n", sum_size, tensor_fusion_threshold);
+         
   void* buffer_data;
   size_t buffer_len;
 
@@ -166,35 +180,94 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       num_elements_division = num_elements;
     } else {
       // There was the bug
-        num_elements_division = (division == (num_divisions - 1)) ? 
+      num_elements_division = division == num_divisions - 1 && buffer_len % tensor_fusion_threshold != 0 ?
         (buffer_len % tensor_fusion_threshold) / sizeof(float) : tensor_fusion_threshold / sizeof(float);
     }
 
-      int division_offset = division * (tensor_fusion_threshold / sizeof(float));
-      //partition the data_buffer into chunks
-      int numElemsPerNode = num_elements_division / numNodes;
-      int residue = num_elements_division % numNodes;
-      int startElem = (numElemsPerNode * rank) + std::min(residue, rank);
-      int numElems = numElemsPerNode + ((rank < residue) ? 1 : 0);
-      int numBuckets = ceil(numElemsPerNode / (double)bucket_size); 
+    int division_offset = division * (tensor_fusion_threshold / sizeof(float));
+    int num_elems_per_node = num_elements_division / num_nodes;
+    int residue = num_elements_division % num_nodes;
+    int start_elem = num_elems_per_node * rank + std::min(residue, rank);
+    int num_elems = num_elems_per_node + (rank < residue ? 1 : 0);
+    int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
 
-      //first round of MPI communication
+    //printf("Ready to prepare first round\n");
+/*    std::vector<MPI_Request> request_reduce;
+    int counter1 = 0;
+    for (int i = 0; i < num_nodes; i++) {
+      if (i == rank) { //for each node(chunk)
+        continue;
+      }
+      //get start offset and length of this chunk
+      int start_offset = (num_elems_per_node * i) + std::min(residue, i);
+      int length = num_elems_per_node + ((i < residue) ? 1 : 0);
+
+      //find max and min of this chunk
+      GPUFindMaxAndMin((float*)buffer_data + division_offset + start_offset, maxandmin_send[counter1], 
+        length, cuda_context_->streams[first_entry.device]);
+//      GPU_find_max_and_min_bucket((float*)buffer_data + division_offset + start_offset, maxandmin_send[counter1], 
+//        length, bucket_size, cuda_context_->streams[first_entry.device]);
+      //printf("Max and min\n");
+      //GPU_print(maxandmin_send[counter1], 10, cuda_context_->streams[first_entry.device]);
+
+      //quantize this chunk
+      GPUQuantizeValue(quantized_gradients[counter1], (float*)buffer_data + division_offset + start_offset, 
+        maxandmin_send[counter1], length, cuda_states, cuda_context_->streams[first_entry.device]);
+//      GPU_quantize_value_bits(quantized_gradients[counter1], (float*)buffer_data + division_offset + start_offset, 
+//        maxandmin_send[counter1], length, bits, bucket_size, cuda_states, cuda_context_->streams[first_entry.device]);
+
+      //printf("Quantize values\n");
+      counter1++;
+    }
+
+    auto mpi_start = now();
+    counter1 = 0;
+    for (int i = 0; i < num_nodes; i++) {
+      if (i == rank) { //for each node(chunk)
+        continue;
+      }
+      //get length of this chunk
+      int length = num_elems_per_node + ((i < residue) ? 1 : 0);
+      int nb = (length + bucket_size - 1) / bucket_size;
+
+      request_reduce.push_back(MPI_Request());
+      MPI_Irecv(quantized_gradients_recv[counter1], (num_elems + entries_per_byte - 1) / entries_per_byte,
+        MPI_UNSIGNED_CHAR, i, 0,
+        MPI_COMM_WORLD, &request_reduce.back());
+
+      request_reduce.push_back(MPI_Request());
+      MPI_Irecv(maxandmin_recv[counter1], num_buckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+        i, 0, MPI_COMM_WORLD, &request_reduce.back());
+
+      request_reduce.push_back(MPI_Request());
+      MPI_Isend(quantized_gradients[counter1], (length + entries_per_byte - 1) / entries_per_byte, 
+        MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, &request_reduce.back());
+
+      // There was a bug with num_buckets
+      request_reduce.push_back(MPI_Request());
+      MPI_Isend(maxandmin_send[counter1], nb * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+        i, 0, MPI_COMM_WORLD, &request_reduce.back());
+
+      counter1++;
+    }*/ 
+
+    auto mpi_start = now();
       std::vector<MPI_Request> request_reduce;
       int counter1 = 0;
-      for(int i = 0; i < numNodes; i++)
+      for(int i = 0; i < num_nodes; i++)
       {
         if(i != rank) //for each node(chunk)
         {
           //get start offset and length of this chunk
-          int start_offset = (numElemsPerNode * i) + std::min(residue, i);
-          int length = numElemsPerNode + ((i < residue) ? 1 : 0);
+          int start_offset = (num_elems_per_node * i) + std::min(residue, i);
+          int length = num_elems_per_node + ((i < residue) ? 1 : 0);
 
           request_reduce.push_back(MPI_Request());
-          MPI_Irecv(quantized_gradients_recv[counter1], numElems, MPI_UNSIGNED_CHAR, i, 0, 
+          MPI_Irecv(quantized_gradients_recv[counter1], num_elems, MPI_UNSIGNED_CHAR, i, 0, 
             MPI_COMM_WORLD, &request_reduce.back());
 
           request_reduce.push_back(MPI_Request());
-          MPI_Irecv(maxandmin_recv[counter1], numBuckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+          MPI_Irecv(maxandmin_recv[counter1], num_buckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
             i, 0, MPI_COMM_WORLD, &request_reduce.back());
 
           //find max and min of this chunk
@@ -206,88 +279,119 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
             maxandmin_send[counter1], length, cuda_states, cuda_context_->streams[first_entry.device]);
           
           request_reduce.push_back(MPI_Request());
-          MPI_Isend(quantized_gradients[counter1], numElemsPerNode + ((i < residue) ? 1 : 0), 
+          MPI_Isend(quantized_gradients[counter1], num_elems_per_node + ((i < residue) ? 1 : 0), 
             MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, &request_reduce.back());
 
           request_reduce.push_back(MPI_Request());
-          MPI_Isend(maxandmin_send[counter1], numBuckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+          MPI_Isend(maxandmin_send[counter1], num_buckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
             i, 0, MPI_COMM_WORLD, &request_reduce.back());
           
           counter1++;
 
         }
       }
-      
-      MPI_Waitall((int)request_reduce.size(), &request_reduce[0], MPI_STATUSES_IGNORE);
 
-      
-      for(int i = 0; i < (numNodes - 1); i++)
-      {
-        //dequantization
-        GPUDequantizeValue(quantized_gradients_recv[i], maxandmin_recv[i], 
-          dequan_buffer, numElems, cuda_context_->streams[first_entry.device]);
-        
-        //add dequantized value to right place of data_buffer 
-        GPU_add(numElems, dequan_buffer, (float*)buffer_data + division_offset + startElem, 
-          cuda_context_->streams[first_entry.device]); 
-      }
-      
-      //quantize aggregated value  
-      GPUFindMaxAndMin((float*)buffer_data + division_offset + startElem, maxandmin_recv[0], numElems, 
+
+    MPI_Waitall((int)request_reduce.size(), &request_reduce[0], MPI_STATUSES_IGNORE);
+    auto mpi_end = now();
+    global_state_->communication_time += mpi_end - mpi_start;
+    //printf("First phase is finished\n");
+
+    for (int i = 0; i < num_nodes - 1; i++) {
+      //dequantization
+//      GPU_dequantize_value_bits(quantized_gradients_recv[i], maxandmin_recv[i], 
+//       dequan_buffer, num_elems, bits, bucket_size, cuda_context_->streams[first_entry.device]);
+      GPUDequantizeValue(quantized_gradients_recv[i], maxandmin_recv[i], 
+          dequan_buffer, num_elems, cuda_context_->streams[first_entry.device]);
+
+      //add dequantized value to right place of data_buffer 
+      GPU_add(num_elems, dequan_buffer, (float*)buffer_data + division_offset + start_elem, 
         cuda_context_->streams[first_entry.device]);
+    }
 
-      GPUQuantizeValue(quantized_gradients_recv[0], (float*)buffer_data + division_offset + startElem, 
-        maxandmin_recv[0], numElems, cuda_states, cuda_context_->streams[first_entry.device]);
+    // Quantize the sum into quantized_gradients_recv[0] and maxandmin_recv[0]
+      GPUFindMaxAndMin((float*)buffer_data + division_offset + start_elem, maxandmin_recv[0], num_elems, 
+        cuda_context_->streams[first_entry.device]);
+      GPUQuantizeValue(quantized_gradients_recv[0], (float*)buffer_data + division_offset + start_elem, 
+        maxandmin_recv[0], num_elems, cuda_states, cuda_context_->streams[first_entry.device]);
+//    GPU_find_max_and_min_bucket((float*)buffer_data + division_offset + start_elem, maxandmin_recv[0], num_elems, bucket_size,
+//      cuda_context_->streams[first_entry.device]);
+//    GPU_quantize_value_bits(quantized_gradients_recv[0], (float*)buffer_data + division_offset + start_elem, 
+//      maxandmin_recv[0], num_elems, bits, bucket_size, cuda_states, cuda_context_->streams[first_entry.device]);
 
-      //second round of MPI communication
-      int counter2 = 0;
-      std::vector<MPI_Request> request_gather;
-      for(int i = 0; i < numNodes; i++)
-      {
-        if (i != rank)
-        {
-          request_gather.push_back(MPI_Request());
-          MPI_Irecv(quantized_gradients[counter2], numElemsPerNode + ((i < residue) ? 1 : 0), 
-            MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, &request_gather.back());
+    // Dequantize the sum in place of the sum itself. This is necessary for models to be the same.
+/*    GPU_dequantize_value_bits(quantized_gradients_recv[0], maxandmin_recv[0], 
+      dequan_buffer, num_elems, bits, bucket_size, cuda_context_->streams[first_entry.device]);
 
-          request_gather.push_back(MPI_Request());
-          MPI_Irecv(maxandmin_send[counter2], numBuckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
-            i, 0, MPI_COMM_WORLD, &request_gather.back());  
+    cudaMemcpy((void*)((float*)buffer_data + division_offset + start_elem),
+               (const void*) dequan_buffer,
+               num_elems * sizeof(float),
+               cudaMemcpyDeviceToDevice);*/
+//    GPU_copy_value((float*)buffer_data + division_offset + start_elem, dequan_buffer, num_elems, 
+//      cuda_context_->streams[first_entry.device]);
+    //printf("Dequantization and quantization of the sum\n");
+//    printf("Copied with %d result\n", cuda_result);
 
-          request_gather.push_back(MPI_Request());
-          MPI_Isend(quantized_gradients_recv[0], numElems, MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, &request_gather.back());
-
-          request_gather.push_back(MPI_Request());
-          MPI_Isend(maxandmin_recv[0], numBuckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
-            i, 0, MPI_COMM_WORLD, &request_gather.back());      
-
-          counter2++;
-        }
+    //second round of MPI communication. receive the sums from other nodes
+    mpi_start = now();
+    int counter2 = 0;
+    std::vector<MPI_Request> request_gather;
+    for (int i = 0; i < num_nodes; i++) {
+      if (i == rank) {
+        continue;
       }
+      int length = num_elems_per_node + ((i < residue) ? 1 : 0);
+      int nb = (length + bucket_size - 1) / bucket_size;
 
-      MPI_Waitall((int)request_gather.size(), &request_gather[0], MPI_STATUSES_IGNORE);
+      request_gather.push_back(MPI_Request());
+      MPI_Irecv(quantized_gradients[counter2], (length + entries_per_byte - 1) / entries_per_byte,
+        MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, &request_gather.back());
+
+      request_gather.push_back(MPI_Request());
+      MPI_Irecv(maxandmin_send[counter2], num_buckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+        i, 0, MPI_COMM_WORLD, &request_gather.back());
+
+      request_gather.push_back(MPI_Request());
+      MPI_Isend(quantized_gradients_recv[0], (num_elems + entries_per_byte - 1) / entries_per_byte,
+        MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, &request_gather.back());
+
+      request_gather.push_back(MPI_Request());
+      MPI_Isend(maxandmin_recv[0], num_buckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+        i, 0, MPI_COMM_WORLD, &request_gather.back());
+
+      counter2++;
+    }
+
+    MPI_Waitall((int)request_gather.size(), &request_gather[0], MPI_STATUSES_IGNORE);
+    mpi_end = now();
+    global_state_->communication_time += mpi_end - mpi_start;
+    //printf("Second phase is finished\n");
 
     //dequantization
-      //dequantization
-      int counter3 = 0;
-      for(int i = 0; i < numNodes; i++)
-      {
-        if(i != rank)
-        {
-
-          int start_offset = (numElemsPerNode * i) + std::min(residue, i);
-          int length = numElemsPerNode + ((i < residue) ? 1 : 0);
-
-          //dequantize chunk from node i in dequan_buffer     
-          GPUDequantizeValue(quantized_gradients[counter3], maxandmin_send[counter3], 
-            dequan_buffer, length, cuda_context_->streams[first_entry.device]);
-          
-          //copy dequantized data to right place of data_buffer
-          GPU_copy_value((float*)buffer_data + division_offset + start_offset, dequan_buffer, length, 
-            cuda_context_->streams[first_entry.device]);
-          counter3++;
-        }   
+    int counter3 = 0;
+    for (int i = 0; i < num_nodes; i++) {
+      if (i == rank) {
+        continue;
       }
+      int start_offset = (num_elems_per_node * i) + std::min(residue, i);
+      int length = num_elems_per_node + ((i < residue) ? 1 : 0);
+
+      //dequantize chunk from node i in dequan_buffer
+//      GPU_dequantize_value_bits(quantized_gradients[counter3], maxandmin_send[counter3], 
+//        dequan_buffer, length, bits, bucket_size, cuda_context_->streams[first_entry.device]);
+      GPUDequantizeValue(quantized_gradients[counter3], maxandmin_send[counter3], 
+            dequan_buffer, length, cuda_context_->streams[first_entry.device]);
+
+      //copy dequantized data to right place of data_buffer
+//      cudaMemcpy((void*)((float*)buffer_data + division_offset + start_offset),
+//                 (const void*) dequan_buffer,
+//                 length * sizeof(float),
+//                 cudaMemcpyDeviceToDevice);
+      GPU_copy_value((float*)buffer_data + division_offset + start_offset, dequan_buffer, length,
+        cuda_context_->streams[first_entry.device]);
+
+      counter3++;
+    }
 
     //printf("Third phase is finished\n");
   }
