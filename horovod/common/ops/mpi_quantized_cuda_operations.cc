@@ -96,6 +96,8 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
   MPI_Comm_size(MPI_COMM_WORLD, &numNodes);
 
   int64_t tensor_fusion_threshold = global_state_->param_manager.TensorFusionThresholdBytes();
+  // make tensor_fusion_threshold divisible by sizeof(float)
+  tensor_fusion_threshold -= tensor_fusion_threshold % sizeof(float);
 //  std::cerr << rank << " " << num_nodes << " " << tensor_fusion_threshold << std::endl;
 
   //printf("%d\n", global_state_->quantization_bits);
@@ -103,12 +105,12 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
   int bucket_size = 512; // the size of the bucket, should be the power of two and does not exceed 1024
   int entries_per_byte = 8 / bits;
   int64_t num_elements = NumElements(entries);
-  int64_t chunk_size = (int64_t) ceil(1.0 * tensor_fusion_threshold / numNodes);
+  int64_t chunk_size = (int64_t) ceil(1.0 * (tensor_fusion_threshold / sizeof(float)) / numNodes);
 
   if (dequan_buffer == nullptr) {
     //printf("Dequan buffer is null and its size %d\n", chunk_size);
-    cudaMalloc(&dequan_buffer, chunk_size);
-    cuda_states = GPU_init_curand(ceil((double)chunk_size / sizeof(float)), time(NULL), cuda_context_->streams[first_entry.device]);
+    cudaMalloc(&dequan_buffer, chunk_size * sizeof(float));
+    cuda_states = GPU_init_curand(chunk_size, time(NULL), cuda_context_->streams[first_entry.device]);
     for (int i = 0; i < numNodes - 1; i++) {
       // allocate memory for this chunk. We partition the entire gradients into N chunks, where N is the number of MPI nodes.
       float* maxandmin_per_node;
@@ -117,12 +119,12 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       unsigned char* quantized_gradients_per_node_recv;
 
       //calculate how many buckets in each chunk. Then each bucket has 2 float values: maximum and minimum.
-      cudaMalloc(&maxandmin_per_node, ceil(1.0 * chunk_size / (bucket_size * sizeof(float))) * 2 * sizeof(float));
-      cudaMalloc(&maxandmin_per_node_recv, ceil(1.0 * chunk_size / (bucket_size * sizeof(float))) * 2 * sizeof(float));
+      cudaMalloc(&maxandmin_per_node, ceil(1.0 * chunk_size / bucket_size) * 2 * sizeof(float));
+      cudaMalloc(&maxandmin_per_node_recv, ceil(1.0 * chunk_size / bucket_size) * 2 * sizeof(float));
 
       //We quantize values from 32 bits to <bits> bits, so the size of quantized chunk is <bits> / 32 of full precision chunk.
-      cudaMalloc(&quantized_gradients_per_node, ceil(1.0 * chunk_size * bits / 32));
-      cudaMalloc(&quantized_gradients_per_node_recv, ceil(1.0 * chunk_size * bits / 32));
+      cudaMalloc(&quantized_gradients_per_node, chunk_size * bits);
+      cudaMalloc(&quantized_gradients_per_node_recv, chunk_size * bits);
 
       maxandmin_send.push_back(maxandmin_per_node);
       quantized_gradients.push_back(quantized_gradients_per_node);
@@ -165,8 +167,7 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     if (entries.size() > 1) {
       num_elements_division = num_elements;
     } else {
-      // There was the bug
-        num_elements_division = (division == (num_divisions - 1)) ? 
+      num_elements_division = (division == (num_divisions - 1) && buffer_len % tensor_fusion_threshold != 0) ? 
         (buffer_len % tensor_fusion_threshold) / sizeof(float) : tensor_fusion_threshold / sizeof(float);
     }
 
@@ -176,7 +177,7 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       int residue = num_elements_division % numNodes;
       int startElem = (numElemsPerNode * rank) + std::min(residue, rank);
       int numElems = numElemsPerNode + ((rank < residue) ? 1 : 0);
-      int numBuckets = ceil(numElemsPerNode / (double)bucket_size); 
+      int numBuckets = ceil(numElems / (double)bucket_size); 
 
       //first round of MPI communication
       std::vector<MPI_Request> request_reduce;
@@ -188,6 +189,7 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
           //get start offset and length of this chunk
           int start_offset = (numElemsPerNode * i) + std::min(residue, i);
           int length = numElemsPerNode + ((i < residue) ? 1 : 0);
+          int nb = ceil(1.0 * length / bucket_size);
 
           request_reduce.push_back(MPI_Request());
           MPI_Irecv(quantized_gradients_recv[counter1], numElems, MPI_UNSIGNED_CHAR, i, 0, 
@@ -206,11 +208,11 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
             maxandmin_send[counter1], length, cuda_states, cuda_context_->streams[first_entry.device]);
           
           request_reduce.push_back(MPI_Request());
-          MPI_Isend(quantized_gradients[counter1], numElemsPerNode + ((i < residue) ? 1 : 0), 
+          MPI_Isend(quantized_gradients[counter1], length, 
             MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, &request_reduce.back());
 
           request_reduce.push_back(MPI_Request());
-          MPI_Isend(maxandmin_send[counter1], numBuckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+          MPI_Isend(maxandmin_send[counter1], nb * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
             i, 0, MPI_COMM_WORLD, &request_reduce.back());
           
           counter1++;
@@ -246,12 +248,14 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       {
         if (i != rank)
         {
+          int length = numElemsPerNode + (i < residue ? 1 : 0);
+          int nb = ceil(1.0 * length / bucket_size);
           request_gather.push_back(MPI_Request());
-          MPI_Irecv(quantized_gradients[counter2], numElemsPerNode + ((i < residue) ? 1 : 0), 
+          MPI_Irecv(quantized_gradients[counter2], length,
             MPI_UNSIGNED_CHAR, i, 0, MPI_COMM_WORLD, &request_gather.back());
 
           request_gather.push_back(MPI_Request());
-          MPI_Irecv(maxandmin_send[counter2], numBuckets * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
+          MPI_Irecv(maxandmin_send[counter2], nb * 2, mpi_context_->GetMPIDataType(first_entry.tensor),
             i, 0, MPI_COMM_WORLD, &request_gather.back());  
 
           request_gather.push_back(MPI_Request());

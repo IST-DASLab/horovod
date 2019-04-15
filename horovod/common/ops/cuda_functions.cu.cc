@@ -198,13 +198,20 @@ __global__ void _findMaxAndMin(float *array, float *maxandmin, int n)
 
                 if(i == 512 / 2) //get data in cache in first loop
                 {
-                    cache1[index_in_bucket + offset] = fmaxf(array[j], array[j + i]);
-                    cache2[index_in_bucket + offset] = fminf(array[j], array[j + i]);                 
+                    if (i + j < n) {
+                      cache1[index_in_bucket + offset] = fmaxf(array[j], array[j + i]);
+                      cache2[index_in_bucket + offset] = fminf(array[j], array[j + i]);                 
+                    } else {
+                      cache1[index_in_bucket + offset] = array[j];
+                      cache2[index_in_bucket + offset] = array[j];
+                    }
                 }
                 else
                 {
-                    cache1[index_in_bucket + offset] = fmaxf(cache1[index_in_bucket + offset], cache1[index_in_bucket + offset + i]);
-                    cache2[index_in_bucket + offset] = fminf(cache2[index_in_bucket + offset], cache2[index_in_bucket + offset + i]);  
+                    if (index_in_bucket + offset + i < n) {
+                      cache1[index_in_bucket + offset] = fmaxf(cache1[index_in_bucket + offset], cache1[index_in_bucket + offset + i]);
+                      cache2[index_in_bucket + offset] = fminf(cache2[index_in_bucket + offset], cache2[index_in_bucket + offset + i]);
+                    }
                 }
 
             }
@@ -241,8 +248,12 @@ __global__ void _quantizeValue(unsigned char *x, const float *y, const float *ma
     {
         int my_bucket = i / 512;
         float unit = (maxandmin[my_bucket * 2] - maxandmin[my_bucket * 2 + 1]) / 255.0;
-        float d = (y[i] - maxandmin[my_bucket * 2 + 1]) / unit + (curand(&local_state)%1000001 / 1000000.0); 
-        x[i] = (unsigned char) floor(d);
+        if (n == 1) {
+          x[i] = maxandmin[my_bucket * 2];
+        } else {
+          float d = (y[i] - maxandmin[my_bucket * 2 + 1]) / unit + (curand(&local_state)%1000001 / 1000000.0); 
+          x[i] = (unsigned char) floor(d);
+        }
     }
     states[index] = local_state;       
 }
