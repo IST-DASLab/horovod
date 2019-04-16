@@ -174,6 +174,22 @@ __global__ void _print(float* x, int n) {
   }
 }
 
+__global__ void _findMaxAndMinSeq(float* a, float* maxandmin, int n) {
+  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+  unsigned int stride = gridDim.x * blockDim.x;
+
+  for (int i = index; i < (n + 511) / 512; i += stride) {
+    float mmin = a[i * 512];
+    float mmax = a[i * 512];
+    for (int j = i * 512; j < fminf((i + 1) * 512, n); j++) {
+      mmin = fminf(mmin, a[j]);
+      mmax = fmaxf(mmax, a[j]);
+    }
+    maxandmin[2 * i] = mmax;
+    maxandmin[2 * i + 1] = mmin;
+  }
+}
+
 __global__ void _findMaxAndMin(float *array, float *maxandmin, int n)
 {
     unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
@@ -326,7 +342,7 @@ void GPU_print(float* x, int n, cudaStream_t stream) {
 void GPUFindMaxAndMin(float *array, float *maxandmin, int n, cudaStream_t stream)
 {
     int blocksPerGrid = (int) ceil(1.0 * n / maxThreadsPerBlock);
-    _findMaxAndMin<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(array, maxandmin, n);
+    _findMaxAndMinSeq<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(array, maxandmin, n);
     cudaStreamSynchronize(stream); 
 }
 
