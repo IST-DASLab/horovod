@@ -77,6 +77,22 @@ __global__ void _find_max_and_min(float* array, float* maxandmin, int n) {
   }
 }
 
+__global__ void _find_max_and_min_bucket_seq(float* x, float* maxandmin, int n, const int bucket_size) {
+  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+  unsigned int stride = gridDim.x * blockDim.x;
+
+  for (int i = index; i < (n + bucket_size - 1) / bucket_size; i += stride) {
+    float mmin = x[i * bucket_size];
+    float mmax = x[i * bucket_size];
+    for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
+      mmin = fminf(mmin, x[j]);
+      mmax = fmaxf(mmax, x[j]);
+    }
+    maxandmin[2 * i] = mmax;
+    maxandmin[2 * i + 1] = mmin;
+  }
+}
+
 __global__ void _find_max_and_min_bucket(float* x, float* maxandmin, int n, const int bucket_size) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
@@ -193,7 +209,7 @@ void GPU_add(int n, float* x, float* y, cudaStream_t stream) {
 
 void GPU_find_max_and_min_bucket(float* x, float* maxandmin, int n, int bucket_size, cudaStream_t stream) {
   int blocksPerGrid = (int) ceil(1.0 * n / maxThreadsPerBlock);
-  _find_max_and_min_bucket<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(x, maxandmin, n, bucket_size);
+  _find_max_and_min_bucket_seq<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(x, maxandmin, n, bucket_size);
 //  _find_max_and_min<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(x, maxandmin, n);
   cudaStreamSynchronize(stream);
 }
