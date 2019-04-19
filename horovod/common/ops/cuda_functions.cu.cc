@@ -55,8 +55,8 @@ __global__ void _find_max_and_min(float* array, float* maxandmin, int n) {
     while (i != 0) {
       if (index_in_bucket < i) {
         if (i == 512 / 2) { //get data in cache in first loop
-          cache1[index_in_bucket + offset] = j + i < n ? array[j] : fmaxf(array[j], array[j + i]);
-          cache2[index_in_bucket + offset] = j + i < n ? array[j] : fminf(array[j], array[j + i]);                 
+          cache1[index_in_bucket + offset] = j + i < n ? fmaxf(array[j], array[j + i]): array[j];
+          cache2[index_in_bucket + offset] = j + i < n ? fminf(array[j], array[j + i]): array[j];
         } else {
           if (index_in_bucket + offset + i < n) {
             cache1[index_in_bucket + offset] = fmaxf(cache1[index_in_bucket + offset], cache1[index_in_bucket + offset + i]);
