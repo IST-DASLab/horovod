@@ -18,6 +18,7 @@ from __future__ import division
 from __future__ import print_function
 
 from horovod.common import check_extension
+from horovod.torch.mpi_ops import allreduce_time, communication_time
 
 try:
     check_extension('horovod.torch', 'HOROVOD_WITH_PYTORCH',
