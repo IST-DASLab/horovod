@@ -212,7 +212,17 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
       GPU_quantize_value_bits(quantized_gradients[counter1], (float*)buffer_data + division_offset + start_offset, 
         maxandmin_send[counter1], length, bits, bucket_size, cuda_states, cuda_context_->streams[first_entry.device]);
       //printf("Quantize values\n");
+      counter1++;
+    }
 
+    auto mpi_start = now();
+    counter1 = 0;
+    for (int i = 0; i < num_nodes; i++) {
+      if (i == rank) { //for each node(chunk)
+        continue;
+      }
+      //get length of this chunk
+      int length = num_elems_per_node + ((i < residue) ? 1 : 0);
       int nb = (length + bucket_size - 1) / bucket_size;
 
       request_reduce.push_back(MPI_Request());
@@ -237,6 +247,8 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     }
 
     MPI_Waitall((int)request_reduce.size(), &request_reduce[0], MPI_STATUSES_IGNORE);
+    auto mpi_end = now();
+    global_state_->communication_time += mpi_end - mpi_start;
     //printf("First phase is finished\n");
 
     for (int i = 0; i < num_nodes - 1; i++) {
@@ -269,6 +281,7 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
 //    printf("Copied with %d result\n", cuda_result);
 
     //second round of MPI communication. receive the sums from other nodes
+    mpi_start = now();
     int counter2 = 0;
     std::vector<MPI_Request> request_gather;
     for (int i = 0; i < num_nodes; i++) {
@@ -298,6 +311,8 @@ Status MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entri
     }
 
     MPI_Waitall((int)request_gather.size(), &request_gather[0], MPI_STATUSES_IGNORE);
+    mpi_end = now();
+    global_state_->communication_time += mpi_end - mpi_start;
     //printf("Second phase is finished\n");
 
     //dequantization
