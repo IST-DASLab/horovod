@@ -138,8 +138,8 @@ __global__ void _quantize_value_bits(unsigned char* x, const float* y, const flo
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
 
-  curandState local_state;
-  local_state = states[index];
+//  curandState local_state;
+//  local_state = states[index];
 
   int parts = 8 / bits;
   int divisor = 1 << bits;
@@ -149,12 +149,12 @@ __global__ void _quantize_value_bits(unsigned char* x, const float* y, const flo
     for (int j = 0; j < parts && i * parts + j < n; j++) {
       int my_bucket = (i * parts + j) / bucket_size;
       float unit = (maxandmin[my_bucket * 2] - maxandmin[my_bucket * 2 + 1]) / (divisor - 1);
-      float d = (y[i * parts + j] - maxandmin[my_bucket * 2 + 1]) / unit + (curand(&local_state) % 1000001 / 1000000.0); 
+      float d = (y[i * parts + j] - maxandmin[my_bucket * 2 + 1]) / unit; //+ (curand(&local_state) % 1000001 / 1000000.0);
       a += ((int)floor(d)) << (j * bits);
     }
     x[i] = (unsigned char) a;
   }
-  states[index] = local_state;       
+//  states[index] = local_state;
 }
 
 __global__ void _dequantize_value_bits(unsigned char* recv, float* maxandmin, float* x, const int n, const int bits, const int bucket_size) {
@@ -190,15 +190,15 @@ __global__ void _print(float* x, int n) {
   }
 }
 
-curandState* GPU_init_curand(int n, unsigned int seed, cudaStream_t stream) {
-  curandState* states;
-
-  int blocksPerGrid = (int) ceil(1.0 * n / maxThreadsPerBlock);
-  cudaMalloc(&states, blocksPerGrid * maxThreadsPerBlock * sizeof(curandState));
-
+void GPU_init_curand(curandState* states, int num_elems,
+    unsigned int seed, cudaStream_t stream) {
+  int blocksPerGrid = (int) ceil(1.0 * num_elems / maxThreadsPerBlock);
   _init_curand<<<blocksPerGrid, maxThreadsPerBlock, 0, stream>>>(seed, states);
+}
 
-  return states;    
+int GPU_get_curand_array_size(int num_elems) {
+  int blocksPerGrid = (int) ceil(1.0 * num_elems / maxThreadsPerBlock);
+  return blocksPerGrid * maxThreadsPerBlock * sizeof(curandState);
 }
 
 void GPU_add(int n, float* x, float* y, cudaStream_t stream) {

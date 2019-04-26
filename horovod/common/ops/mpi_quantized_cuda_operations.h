@@ -17,7 +17,6 @@
 #ifndef HOROVOD_MPI_QUANTIZED_CUDA_OPERATIONS_H
 #define HOROVOD_MPI_QUANTIZED_CUDA_OPERATIONS_H
 
-#include "../mpi_context.h"
 #include "cuda_operations.h"
 #include "cuda_functions.h"
 #include <cuda.h>
@@ -25,8 +24,43 @@
 #include <curand_kernel.h>
 #include <curand.h>
 
+#include "../mpi_context.h"
+#include "../common.h"
+
 namespace horovod {
 namespace common {
+
+
+class ExtraBufferManager {
+public:
+  ExtraBufferManager(HorovodGlobalState* global_state):global_state_(global_state){}
+
+  Status InitializeBuffers(const std::vector<horovod::common::TensorTableEntry>& entries);
+
+  enum {
+    DEQUAN,
+    CUDA_STATES,
+    MAXMIN_SEND,
+    MAXMIN_RECV,
+    QUAN_SEND,
+    QUAN_RECV,
+  };
+
+  template <int bufIndex>
+  void *getBuffer();
+  template <int bufIndex, typename T>
+  std::vector<T>& getvBuffer();
+private:
+  using PB_ptr = std::shared_ptr<PersistentBuffer>;
+  using VPB_ptr = std::vector<PB_ptr>;
+  using tuplePBufs = std::tuple<PB_ptr,PB_ptr,VPB_ptr,VPB_ptr,VPB_ptr,VPB_ptr>
+  using tupleBufs = std::tuple<float *, curandState*, float *, float *, unsigned char*, unsigned char *>;
+  // Map of buffers used for quantization indexed by framework.
+  // This operation only works with gpu, so no need to index by device.
+  std::map<Framework, std::pair<tuplePBufs, tupleBufs>> extra_buffers_;
+  HorovodGlobalState* global_state_;
+  tupleBufs bufs_;
+};
 
 class MPI_Quantized_CUDAAllreduce : public CUDAAllreduce {
 public:
@@ -35,16 +69,28 @@ public:
 
   Status Execute(std::vector<TensorTableEntry>& entries, const Response& response) override;
 
+  Status AllocateExtraBuffers(const std::vector<horovod::common::TensorTableEntry>& entries);
 protected:
   MPIContext* mpi_context_;
 
 private:
-  float* dequan_buffer = nullptr;
+  const int bucket_size = 512; // the size of the bucket, should be the power of two and does not exceed 1024
+  float *dequan_buffer = nullptr;
+  std::shared_ptr<PersistentBuffer> dequan_buffer_pb;
+  std::shared_ptr<PersistentBuffer> cuda_states_pb;
   curandState* cuda_states = nullptr;
-  std::vector<float*> maxandmin_send;
-  std::vector<float*> maxandmin_recv;
-  std::vector<unsigned char*> quantized_gradients;
-  std::vector<unsigned char*> quantized_gradients_recv;
+
+  ExtraBufferManager bufferManager;
+
+  std::vector<std::shared_ptr<PersistentBuffer>> maxandmin_send_buf;
+  std::vector<std::shared_ptr<PersistentBuffer>> maxandmin_recv_buf;
+  std::vector<std::shared_ptr<PersistentBuffer>> quantized_gradients_buf;
+  std::vector<std::shared_ptr<PersistentBuffer>> quantized_gradients_recv_buf;
+
+  std::vector<float *> maxandmin_send;
+  std::vector<float *> maxandmin_recv;
+  std::vector<unsigned char *> quantized_gradients;
+  std::vector<unsigned char *> quantized_gradients_recv;
 };
 
 } // namespace common
