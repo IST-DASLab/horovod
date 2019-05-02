@@ -631,7 +631,7 @@ def customize_compiler_for_nvcc(self):
         if os.path.split(src)[1] == 'cuda_functions.cu.cc':
             # use the cuda for .cu files
 #            self.set_executable('compiler_so', ['/usr/local/cuda/9.0/bin/nvcc'])
-            self.set_executable('compiler_so', ['/usr/local/cuda-9.0/bin/nvcc'])
+            self.set_executable('compiler_so', ['nvcc'])
             # use only a subset of the extra_postargs, which are 1-1 translated
             # from the extra_compile_args in the Extension class
             postargs = ['-c', '-std=c++11', '-x=cu', '-arch=sm_37',
@@ -884,7 +884,9 @@ def build_torch_extension(build_ext, options, torch_version):
         # ffi_ext is distutils Extension, not setuptools Extension
         for k, v in ffi_ext.__dict__.items():
             setuptools_ext.__dict__[k] = v
+        customize_compiler_for_nvcc(build_ext.compiler)
         build_ext.build_extension(setuptools_ext)
+
 
 
 def build_torch_extension_v2(build_ext, options, torch_version):
@@ -936,6 +938,7 @@ def build_torch_extension_v2(build_ext, options, torch_version):
     # Patch an existing torch_mpi_lib_v2 extension object.
     for k, v in ext.__dict__.items():
         torch_mpi_lib_v2.__dict__[k] = v
+    customize_compiler_for_nvcc(build_ext.compiler)
     build_ext.build_extension(torch_mpi_lib_v2)
 
 
