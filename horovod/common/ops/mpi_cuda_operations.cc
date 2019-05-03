@@ -28,7 +28,6 @@ MPI_CUDAAllreduce::MPI_CUDAAllreduce(MPIContext* mpi_context,
 Status MPI_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
   auto start = now();
   auto& first_entry = entries[0];
-
   InitCUDA(entries);
 
   void* buffer_data;

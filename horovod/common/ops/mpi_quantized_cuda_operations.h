@@ -17,83 +17,59 @@
 #ifndef HOROVOD_MPI_QUANTIZED_CUDA_OPERATIONS_H
 #define HOROVOD_MPI_QUANTIZED_CUDA_OPERATIONS_H
 
-#include "cuda_operations.h"
 #include "cuda_functions.h"
+#include "cuda_operations.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <curand_kernel.h>
 #include <curand.h>
+#include <curand_kernel.h>
 
-#include "../mpi_context.h"
 #include "../common.h"
+#include "../mpi_context.h"
 
 namespace horovod {
 namespace common {
 
-
-class ExtraBufferManager {
-public:
-  ExtraBufferManager(HorovodGlobalState* global_state):global_state_(global_state){}
-
-  Status InitializeBuffers(const std::vector<horovod::common::TensorTableEntry>& entries);
-
-  enum {
-    DEQUAN,
-    CUDA_STATES,
-    MAXMIN_SEND,
-    MAXMIN_RECV,
-    QUAN_SEND,
-    QUAN_RECV,
-  };
-
-  template <int bufIndex>
-  void *getBuffer();
-  template <int bufIndex, typename T>
-  std::vector<T>& getvBuffer();
-private:
-  using PB_ptr = std::shared_ptr<PersistentBuffer>;
-  using VPB_ptr = std::vector<PB_ptr>;
-  using tuplePBufs = std::tuple<PB_ptr,PB_ptr,VPB_ptr,VPB_ptr,VPB_ptr,VPB_ptr>
-  using tupleBufs = std::tuple<float *, curandState*, float *, float *, unsigned char*, unsigned char *>;
-  // Map of buffers used for quantization indexed by framework.
-  // This operation only works with gpu, so no need to index by device.
-  std::map<Framework, std::pair<tuplePBufs, tupleBufs>> extra_buffers_;
-  HorovodGlobalState* global_state_;
-  tupleBufs bufs_;
-};
-
 class MPI_Quantized_CUDAAllreduce : public CUDAAllreduce {
 public:
-  MPI_Quantized_CUDAAllreduce(MPIContext* mpi_context, CUDAContext* cuda_context, HorovodGlobalState* global_state);
-  virtual ~MPI_Quantized_CUDAAllreduce()=default;
+  MPI_Quantized_CUDAAllreduce(MPIContext* mpi_context,
+                              CUDAContext* cuda_context,
+                              HorovodGlobalState* global_state);
+  virtual ~MPI_Quantized_CUDAAllreduce() = default;
 
-  Status Execute(std::vector<TensorTableEntry>& entries, const Response& response) override;
+  Status Execute(std::vector<TensorTableEntry>& entries,
+                 const Response& response) override;
 
-  Status AllocateExtraBuffers(const std::vector<horovod::common::TensorTableEntry>& entries);
+  Status Init(const std::vector<horovod::common::TensorTableEntry>& entries);
+
+  bool Enabled(const ParameterManager& param_manager,
+               const std::vector<TensorTableEntry>& entries,
+               const Response& response) const override;
+
 protected:
   MPIContext* mpi_context_;
 
 private:
-  const int bucket_size = 512; // the size of the bucket, should be the power of two and does not exceed 1024
-  float *dequan_buffer = nullptr;
-  std::shared_ptr<PersistentBuffer> dequan_buffer_pb;
-  std::shared_ptr<PersistentBuffer> cuda_states_pb;
+  const unsigned int bucket_size = 512; // the size of the bucket, should be the
+                                        // power of two and does not exceed 1024
+  int64_t maxmin_size;
+  int64_t quantized_buffer_size;
+  int64_t tensor_fusion_threshold;
+  int64_t chunk_size;
+  int num_elems_in_chunk;
+
+  FusionBufferManager bufferManager;
+
+  float* dequan_buffer = nullptr;
   curandState* cuda_states = nullptr;
 
-  ExtraBufferManager bufferManager;
-
-  std::vector<std::shared_ptr<PersistentBuffer>> maxandmin_send_buf;
-  std::vector<std::shared_ptr<PersistentBuffer>> maxandmin_recv_buf;
-  std::vector<std::shared_ptr<PersistentBuffer>> quantized_gradients_buf;
-  std::vector<std::shared_ptr<PersistentBuffer>> quantized_gradients_recv_buf;
-
-  std::vector<float *> maxandmin_send;
-  std::vector<float *> maxandmin_recv;
-  std::vector<unsigned char *> quantized_gradients;
-  std::vector<unsigned char *> quantized_gradients_recv;
+  float* maxandmin_send;
+  float* maxandmin_recv;
+  unsigned char* quantized_gradients_send;
+  unsigned char* quantized_gradients_recv;
 };
 
 } // namespace common
 } // namespace horovod
 
-#endif //HOROVOD_MPI_QUANTIZED_CUDA_OPERATIONS_H
+#endif // HOROVOD_MPI_QUANTIZED_CUDA_OPERATIONS_H
