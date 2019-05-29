@@ -49,6 +49,14 @@ public:
   virtual bool Enabled(const ParameterManager& param_manager,
                        const std::vector<TensorTableEntry>& entries,
                        const Response& response) const = 0;
+  // We use Enabled for single entry when pack entries into fusion buffer.
+  virtual bool Enabled(const ParameterManager& param_manager,
+                       const TensorTableEntry& entry,
+                       const Response& response) const = 0;
+
+  virtual bool Packed(const ParameterManager& param_manager,
+                      const TensorTableEntry& entry, const Response& response,
+                      const TensorTableEntry& new_entry, const Response & new_response) const;
 
 protected:
   virtual void MemcpyInFusionBuffer(const std::vector<TensorTableEntry>& entries, const void*& fused_input_data,

@@ -108,7 +108,9 @@ class _DistributedOptimizer(torch.optim.Optimizer):
         name = self._parameter_names.get(p)
         tensor = p.grad
         tensor_compressed, ctx = self._compression.compress(tensor)
-
+        if "fc.weight" in name and tensor.numel() > 1000000:
+            print("Input", name)
+            print(tensor[0][:5])
         handle = allreduce_async_(tensor_compressed, average=True, name=name)
         return handle, ctx
 
@@ -143,6 +145,9 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                 self._handles[p] = (handle, ctx)
         for p, (handle, _) in self._handles.items():
             output = synchronize(handle)
+            if "fc.weight" in self._parameter_names.get(p) and output.numel() > 1000000:
+                print("Output", self._parameter_names.get(p))
+                print(output[0][:5])
             self._allreduce_delay[p] = self.backward_passes_per_step
             p.grad.set_(self._compression.decompress(output, ctx))
         self._handles.clear()

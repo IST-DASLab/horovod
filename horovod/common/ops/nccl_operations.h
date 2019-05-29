@@ -60,6 +60,9 @@ public:
   bool Enabled(const ParameterManager& param_manager,
                const std::vector<TensorTableEntry>& entries,
                const Response& response) const override;
+  bool Enabled(const ParameterManager& param_manager,
+               const TensorTableEntry& entry,
+               const Response& response) const override;
 
 private:
   void PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,

@@ -49,8 +49,8 @@ __global__ void _quantize_value_bits(unsigned char* x, const float* y,
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
 
-  //  curandState local_state;
-  //  local_state = states[index];
+  curandState local_state;
+  local_state = states[index];
 
   int parts = 8 / bits;
   int divisor = 1 << bits;
@@ -62,12 +62,12 @@ __global__ void _quantize_value_bits(unsigned char* x, const float* y,
       float unit = (maxandmin[my_bucket * 2] - maxandmin[my_bucket * 2 + 1]) /
                    (divisor - 1);
       float d = (y[i * parts + j] - maxandmin[my_bucket * 2 + 1]) /
-                unit; //+ (curand(&local_state) % 1000001 / 1000000.0);
+                unit + (curand(&local_state) % 1000001 / 1000000.0);
       a += ((int)floor(d)) << (j * bits);
     }
     x[i] = (unsigned char)a;
   }
-  //  states[index] = local_state;
+  states[index] = local_state;
 }
 
 __global__ void _dequantize_value_bits(unsigned char* recv, float* maxandmin,

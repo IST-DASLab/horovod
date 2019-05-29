@@ -74,6 +74,12 @@ bool MPIAllreduce::Enabled(const ParameterManager& param_manager,
   return true;
 }
 
+bool MPIAllreduce::Enabled(const ParameterManager& param_manager,
+                           const TensorTableEntry& entry,
+                           const Response& response) const {
+  return true;
+}
+
 void MPIAllreduce::MemcpyEntryInFusionBuffer(const std::vector<TensorTableEntry>& entries,
                                              const TensorTableEntry& e, void* buffer_data_at_offset) {
   std::memcpy(buffer_data_at_offset, e.tensor->data(),

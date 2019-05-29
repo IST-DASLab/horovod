@@ -99,7 +99,13 @@ CUDAAllreduce::CUDAAllreduce(CUDAContext* context,
 bool CUDAAllreduce::Enabled(const ParameterManager& param_manager,
                             const std::vector<TensorTableEntry>& entries,
                             const Response& response) const {
-  return entries[0].device != CPU_DEVICE_ID;
+  return Enabled(param_manager, entries[0], response);
+}
+
+bool CUDAAllreduce::Enabled(const ParameterManager& param_manager,
+                            const TensorTableEntry& entry,
+                            const Response& response) const {
+  return entry.device != CPU_DEVICE_ID;
 }
 
 void CUDAAllreduce::MemcpyEntryInFusionBuffer(const std::vector<TensorTableEntry>& entries,

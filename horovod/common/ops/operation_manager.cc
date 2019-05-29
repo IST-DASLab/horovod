@@ -14,6 +14,7 @@
 // =============================================================================
 
 #include "operation_manager.h"
+#include <cassert>
 
 namespace horovod {
 namespace common {
@@ -77,6 +78,22 @@ Status OperationManager::ExecuteOperation(std::vector<TensorTableEntry>& entries
   } else {
     throw std::logic_error("No operation found for response type provided");
   }
+}
+
+bool OperationManager::Packed(
+    const TensorTableEntry& entry,
+    const Response& response,
+    const TensorTableEntry& new_entry,
+    const Response& new_response) {
+  assert(response.response_type() == Response::ALLREDUCE);
+  for (auto &op: allreduce_ops_) {
+    if (op->Enabled(*param_manager_, entry, response) ||
+        op->Enabled(*param_manager_, new_entry, new_response)) {
+      return op->Packed(*param_manager_, entry, response, new_entry,
+          new_response);
+    }
+  }
+  return false;
 }
 
 } // namespace common

@@ -43,15 +43,20 @@ public:
   Status Init(const std::vector<horovod::common::TensorTableEntry>& entries);
 
   bool Enabled(const ParameterManager& param_manager,
-               const std::vector<TensorTableEntry>& entries,
+               const TensorTableEntry& entry,
                const Response& response) const override;
-
+  bool Packed(const ParameterManager& param_manager,
+              const TensorTableEntry& entry, const Response& response,
+              const TensorTableEntry& new_entry,
+              const Response & new_response) const override;
+  bool AcceptableEntry(const TensorTableEntry& entry) const;
 protected:
   MPIContext* mpi_context_;
 
 private:
   const unsigned int bucket_size = 512; // the size of the bucket, should be the
                                         // power of two and does not exceed 1024
+  int64_t quantize_threshold;
   int64_t maxmin_size;
   int64_t quantized_buffer_size;
   int64_t tensor_fusion_threshold;

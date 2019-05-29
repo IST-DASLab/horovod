@@ -70,6 +70,9 @@ public:
                const std::vector<TensorTableEntry>& entries,
                const Response& response) const override;
 
+  bool Enabled(const ParameterManager& param_manager,
+               const TensorTableEntry& entry,
+               const Response& response) const override;
 protected:
   void MemcpyEntryInFusionBuffer(const std::vector<TensorTableEntry>& entries,
                                  const TensorTableEntry& e, void* buffer_data_at_offset) override;

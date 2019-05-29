@@ -946,9 +946,9 @@ def build_torch_extension_v2(build_ext, options, torch_version):
 class custom_build_ext(build_ext):
     def build_extensions(self):
         options = get_common_options(self)
-        print("HOROVOD_WITHOUT_PYTORCH", not os.environ.get('HOROVOD_WITHOUT_PYTORCH'))
-        print("HOROVOD_WITHOUT_TENSORFLOW", not os.environ.get('HOROVOD_WITHOUT_TENSORFLOW'))
-        print("HOROVOD_WITHOUT_MXNET", not os.environ.get('HOROVOD_WITHOUT_MXNET'))
+        print("HOROVOD_WITH_PYTORCH", not os.environ.get('HOROVOD_WITHOUT_PYTORCH'))
+        print("HOROVOD_WITH_TENSORFLOW", not os.environ.get('HOROVOD_WITHOUT_TENSORFLOW'))
+        print("HOROVOD_WITH_MXNET", not os.environ.get('HOROVOD_WITHOUT_MXNET'))
         built_plugins = []
         # If PyTorch is installed, it must be imported before TensorFlow, otherwise
         # we may get an error: dlopen: cannot load any more object with static TLS

@@ -134,10 +134,10 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   std::vector<std::shared_ptr<BroadcastOp>> broadcast_ops;
 
 #if HAVE_CUDA
-#if HOROVOD_GPU_ALLREDUCE == 'M'
   #if QUANTIZATION
   allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_Quantized_CUDAAllreduce(&mpi_context, &cuda_context, &state)));
   #endif
+#if HOROVOD_GPU_ALLREDUCE == 'M'
   allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_CUDAAllreduce(&mpi_context, &cuda_context, &state)));
 #else
   #if HAVE_NCCL && HOROVOD_GPU_ALLREDUCE == 'N'
@@ -1071,14 +1071,12 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
           ConstructResponse(state.message_table, tensor_name);
       responses.push_back(std::move(response));
     }
-
     ResponseList response_list;
     response_list.set_shutdown(should_shut_down);
     {
       // Protect access to tensor table.
       std::lock_guard<std::mutex> guard(horovod_global.mutex);
       while (!responses.empty()) {
-
         auto response = responses.front();
         assert(response.tensor_names().size() == 1);
         responses.pop_front();
@@ -1096,10 +1094,9 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
             auto& new_entry =
                 state.tensor_table[new_response.tensor_names()[0]];
             int64_t new_tensor_size = new_entry.tensor->size();
-
-            if (response.response_type() == new_response.response_type() &&
-                response.devices() == new_response.devices() &&
-                entry.tensor->dtype() == new_entry.tensor->dtype() &&
+            bool can_be_packed = op_manager->Packed(entry, response, new_entry,
+                new_response);
+            if (can_be_packed &&
                 tensor_size + new_tensor_size <= TensorFusionThresholdBytes()) {
               // These tensors will fuse together well.
               tensor_size += new_tensor_size;
@@ -1123,7 +1120,6 @@ bool RunLoopOnce(HorovodGlobalState& state, MPIContext& ctx, bool is_coordinator
               }
             }
           }
-
           // Replace any skipped responses.
           while (!skipped_responses.empty()) {
             responses.push_front(std::move(skipped_responses.back()));

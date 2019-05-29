@@ -193,6 +193,8 @@ using TensorTable = std::unordered_map<std::string, TensorTableEntry>;
 // Returns current running time in nanoseconds
 int64_t now();
 
+//#define HERE std::cout << __FILE__ << " " << __LINE__ << std::endl;
+#define HERE
 
 } // namespace common
 } // namespace horovod

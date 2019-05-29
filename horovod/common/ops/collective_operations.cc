@@ -62,6 +62,15 @@ void AllreduceOp::MemcpyOutFusionBuffer(const void* buffer_data, std::vector<Ten
   }
 }
 
+bool AllreduceOp::Packed(
+    const ParameterManager& param_manager,
+    const TensorTableEntry& entry, const Response& response,
+    const TensorTableEntry& new_entry, const Response& new_response) const {
+  return response.response_type() == new_response.response_type() &&
+         response.devices() == new_response.devices() &&
+         entry.tensor->dtype() == new_entry.tensor->dtype();
+}
+
 // Allgather
 AllgatherOp::AllgatherOp(HorovodGlobalState* global_state) : HorovodOp(global_state) {}
 

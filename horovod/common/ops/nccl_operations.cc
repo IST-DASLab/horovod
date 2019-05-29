@@ -364,6 +364,15 @@ bool NCCLHierarchicalAllreduce::Enabled(const ParameterManager& param_manager,
   return param_manager.HierarchicalAllreduce();
 }
 
+bool NCCLHierarchicalAllreduce::Enabled(const ParameterManager& param_manager,
+                                        const TensorTableEntry& entry,
+                                        const Response& response) const {
+  if (!NCCLAllreduce::Enabled(param_manager, entry, response)) {
+    return false;
+  }
+  return param_manager.HierarchicalAllreduce();
+}
+
 void NCCLHierarchicalAllreduce::PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,
                                                          Communicator& nccl_id_bcast_comm) {
   nccl_rank = global_state_->local_rank;
