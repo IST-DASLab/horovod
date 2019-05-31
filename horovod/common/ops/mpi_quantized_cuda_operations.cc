@@ -250,15 +250,12 @@ MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries,
       count++;
     }
     // TODO: handling errors!!!
-//    MPI_Waitall((int)request_recv.size(), &request_recv[0],
-//                MPI_STATUSES_IGNORE);
+    MPI_Waitall((int)request_recv.size(), &request_recv[0],
+                MPI_STATUSES_IGNORE);
+    MPI_Waitall((int)request_send.size(), &request_send[0],
+                MPI_STATUSES_IGNORE);
 
     for (int i = 0; i < num_nodes - 1; i++) {
-      // dequantization
-      HERE
-      MPI_Wait(&request_recv[i], MPI_STATUS_IGNORE);
-      HERE
-
       timeline.ActivityStartAll(entries, MPI_QUANTIZED_DEQUANTIZATION);
       GPU_dequantize_value_bits(
           quantized_gradients_recv + i * quantized_buffer_size,
@@ -306,25 +303,25 @@ MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries,
       }
       int length = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
       int nb = (length + bucket_size - 1) / bucket_size;
-      MPI_Waitall(2, &request_send[2 * count], MPI_STATUS_IGNORE);
+//      MPI_Waitall(2, &request_send[2 * count], MPI_STATUS_IGNORE);
 
-//      request_recv[2 * count] = MPI_Request();
+      request_recv[2 * count] = MPI_Request();
       MPI_Irecv(quantized_gradients_send + count * quantized_buffer_size,
                 (length + entries_per_byte - 1) / entries_per_byte,
                 MPI_UNSIGNED_CHAR, node_rank, 0, MPI_COMM_WORLD,
                 &request_recv[2 * count]);
-//      request_recv[2 * count + 1] = MPI_Request();
+      request_recv[2 * count + 1] = MPI_Request();
       MPI_Irecv(maxandmin_send + count * maxmin_size, nb * 2,
                 mpi_context_->GetMPIDataType(first_entry.tensor), node_rank, 0,
                 MPI_COMM_WORLD, &request_recv[2 * count + 1]);
 
-//      request_send[2 * count] = MPI_Request();
+      request_send[2 * count] = MPI_Request();
       MPI_Isend(quantized_gradients_recv,
                 (num_elems + entries_per_byte - 1) / entries_per_byte,
                 MPI_UNSIGNED_CHAR, node_rank, 0, MPI_COMM_WORLD,
                 &request_send[2 * count]);
 
-//      request_send[2 * count + 1] = MPI_Request();
+      request_send[2 * count + 1] = MPI_Request();
       MPI_Isend(maxandmin_recv, num_buckets * 2,
                 mpi_context_->GetMPIDataType(first_entry.tensor), node_rank, 0,
                 MPI_COMM_WORLD, &request_send[2 * count + 1]);
