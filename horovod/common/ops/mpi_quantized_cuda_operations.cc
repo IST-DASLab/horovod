@@ -23,7 +23,8 @@ namespace common {
 #define QUANTIZE_THRESHOLD 100000
 
 bool MPI_Quantized_CUDAAllreduce::AcceptableEntry(const TensorTableEntry& entry) const {
-  return entry.tensor->size() >= quantize_threshold * sizeof(float);
+  return entry.tensor_name.find("conv") == std::string::npos && entry.tensor->size() >= (quantize_threshold * sizeof(float));
+//  return entry.tensor->size() >= (quantize_threshold * sizeof(float));
 }
 
 bool MPI_Quantized_CUDAAllreduce::Enabled(
@@ -139,12 +140,14 @@ MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   int bits = global_state_->quantization_bits; // the amount of bits per value,
                                                // should be 1, 2, 4 or 8
   std::stringstream message;
-  message << "Quantizing tensors: " << std::endl;
-  for (auto& entry: entries) {
-    message << entry.tensor_name << " with size " << entry.tensor->size() << " ";
-  }
-  LOG(DEBUG, global_state_->rank) << message.str();
-
+//  if (global_state_->rank == 0) {
+//    message << "Quantizing tensors: " << std::endl;
+//    for (auto& entry : entries) {
+//      message << entry.tensor_name << " with size " << entry.tensor->size()
+//              << " ";
+//    }
+//    LOG(INFO, global_state_->rank) << message.str();
+//  }
   int entries_per_byte = 8 / bits;
   int64_t num_elements = NumElements(entries);
   HERE
