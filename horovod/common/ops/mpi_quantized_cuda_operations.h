@@ -54,8 +54,8 @@ protected:
   MPIContext* mpi_context_;
 
 private:
-  const unsigned int bucket_size = 512; // the size of the bucket, should be the
-                                        // power of two and does not exceed 1024
+  int quantize_bucket_size; // the size of the bucket, should be the
+                            // power of two and does not exceed 1024
   int64_t quantize_threshold;
   int64_t maxmin_size;
   int64_t quantized_buffer_size;
