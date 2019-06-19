@@ -134,9 +134,9 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   std::vector<std::shared_ptr<BroadcastOp>> broadcast_ops;
 
 #if HAVE_CUDA
-  #if QUANTIZATION
-  allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_Quantized_CUDAAllreduce(&mpi_context, &cuda_context, &state)));
-  #endif
+//  #if QUANTIZATION
+//  allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_Quantized_CUDAAllreduce(&mpi_context, &cuda_context, &state)));
+//  #endif
 #if HOROVOD_GPU_ALLREDUCE == 'M'
   allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_CUDAAllreduce(&mpi_context, &cuda_context, &state)));
 #else

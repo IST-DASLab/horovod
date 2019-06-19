@@ -24,8 +24,8 @@ namespace common {
 #define QUANTIZE_BUCKET_SIZE 512
 
 bool MPI_Quantized_CUDAAllreduce::AcceptableEntry(const TensorTableEntry& entry) const {
-//  return entry.tensor->size() >= (quantize_threshold * sizeof(float));
-  return entry.tensor_name.find("conv") == std::string::npos && entry.tensor->size() >= (quantize_threshold * sizeof(float));
+  return entry.tensor->size() >= (quantize_threshold * sizeof(float));
+//  return entry.tensor_name.find("conv") == std::string::npos && entry.tensor->size() >= (quantize_threshold * sizeof(float));
 }
 
 bool MPI_Quantized_CUDAAllreduce::Enabled(
@@ -47,8 +47,17 @@ bool MPI_Quantized_CUDAAllreduce::Packed(
     const Response& new_response) const {
   if (AcceptableEntry(entry) ^ AcceptableEntry(new_entry))
     return false;
+  auto is_fc = [&](const TensorTableEntry& entry)
+      {return entry.tensor_name.find("fc.weight") != std::string::npos;};
+
+  if (is_fc(entry) ^ is_fc(new_entry))
+    return false;
   return CUDAAllreduce::Packed(param_manager, entry, response, new_entry,
       new_response);
+}
+
+int64_t round_to(int64_t x, int64_t m) {
+  return x + ((m - x % m) % m);
 }
 
 MPI_Quantized_CUDAAllreduce::MPI_Quantized_CUDAAllreduce(
@@ -74,6 +83,10 @@ MPI_Quantized_CUDAAllreduce::MPI_Quantized_CUDAAllreduce(
       ceil(1.0 * chunk_size * global_state->quantization_bits / (sizeof(float) * 8));
   num_elems_in_chunk = ceil(((double)chunk_size) / sizeof(float));
 
+  // Aligning in order to fit CUDA alignment.
+  chunk_size = round_to(chunk_size, 2 * sizeof(float));
+  maxmin_size = round_to(maxmin_size, 2 * sizeof(float));
+  quantized_buffer_size = round_to(quantized_buffer_size, 2 * sizeof(float));
 }
 
 Status MPI_Quantized_CUDAAllreduce::Init(
@@ -90,7 +103,7 @@ Status MPI_Quantized_CUDAAllreduce::Init(
 
   int64_t buffer_size =
         chunk_size + 2 * maxmin_buffers_size +
-        +2 * quantized_buffer_size * (global_state_->size - 1) +
+        + 2 * quantized_buffer_size * (global_state_->size - 1) +
             curand_array_size;
     Status status = bufferManager.InitializeBuffer(
         buffer_size, first_entry.device, first_entry.context,
@@ -129,6 +142,15 @@ Status MPI_Quantized_CUDAAllreduce::Init(
                     cuda_context_->streams[first_entry.device]);
   }
   HERE
+//  if (global_state_->rank == 0) {
+//    std::cout << (maxandmin_send - dequan_buffer) * sizeof(float) % sizeof(curandState) << std::endl;
+//    std::cout << (maxandmin_recv - maxandmin_send) * sizeof(float) % sizeof(curandState) << std::endl;
+//    std::cout << (quantized_gradients_send - (unsigned char *) maxandmin_recv) % sizeof(curandState) << std::endl;
+//    std::cout << (quantized_gradients_recv - quantized_gradients_send) % sizeof(curandState) << std::endl;
+//    std::cout << ((unsigned char *) new_cuda_states - quantized_gradients_recv)% sizeof(curandState) << std::endl;
+//    std::cout << sizeof(curandState) << std::endl << std::flush;
+//  }
+
   return Status::OK();
 }
 
@@ -147,14 +169,14 @@ MPI_Quantized_CUDAAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   int bits = global_state_->quantization_bits; // the amount of bits per value,
                                                // should be 1, 2, 4 or 8
   std::stringstream message;
-//  if (global_state_->rank == 0) {
-//    message << "Quantizing tensors: " << std::endl;
-//    for (auto& entry : entries) {
-//      message << entry.tensor_name << " with size " << entry.tensor->size()
-//              << " ";
-//    }
-//    LOG(INFO, global_state_->rank) << message.str();
-//  }
+  if (global_state_->rank == 0) {
+    message << "Quantizing tensors: " << std::endl;
+    for (auto& entry : entries) {
+      message << entry.tensor_name << " with num elements " <<
+          entry.tensor->size() / sizeof(float) << " ";
+    }
+    LOG(INFO, global_state_->rank) << message.str();
+  }
   int entries_per_byte = 8 / bits;
   int64_t num_elements = NumElements(entries);
   HERE

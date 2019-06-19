@@ -15,6 +15,7 @@
 // =============================================================================
 
 #include "nccl_operations.h"
+#include "quantization.h"
 
 namespace horovod {
 namespace common {
@@ -56,6 +57,7 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Resp
   InitCUDA(entries);
   InitNCCLComm(entries, response.devices());
   InitCUDAQueue(entries, response);
+  printf("NCCLAllreduce");
 
   const void* fused_input_data;
   void* buffer_data;
@@ -84,7 +86,6 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Resp
                                    (size_t) num_elements,
                                    GetNCCLDataType(first_entry.tensor), ncclSum,
                                    *nccl_comm_, *stream_);
-  nccl_context_->ErrorCheck("ncclAllReduce", nccl_result);
   if (global_state_->timeline.Initialized()) {
     cuda_context_->RecordEvent(event_queue_, NCCL_ALLREDUCE, *stream_);
   }
@@ -155,7 +156,7 @@ void NCCLAllreduce::PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,
 NCCLHierarchicalAllreduce::NCCLHierarchicalAllreduce(NCCLContext* nccl_context, MPIContext* mpi_context,
                                                      CUDAContext* cuda_context, HorovodGlobalState* global_state)
     : NCCLAllreduce(nccl_context, mpi_context,
-                    cuda_context, global_state) {}
+                    cuda_context, global_state), quantizer(mpi_context, cuda_context, global_state) {}
 
 Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
   auto& first_entry = entries[0];
@@ -164,9 +165,8 @@ Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries
   std::vector<int32_t> nccl_device_map;
   nccl_device_map.reserve(global_state_->local_comm_ranks.size());
   for (int rank : global_state_->local_comm_ranks) {
-    nccl_device_map.push_back(response.devices()[rank]);
+      nccl_device_map.push_back(response.devices()[rank]);
   }
-
   InitCUDA(entries);
   InitNCCLComm(entries, nccl_device_map);
   InitCUDAQueue(entries, response);
@@ -285,41 +285,50 @@ Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries
   }
 
   if (global_state_->is_homogeneous || is_root_rank) {
-    // cudaHostAlloc is significantly slower than malloc.  Pre-allocating
-    // a buffer is not safe since the tensor can be arbitrarily large.
-    host_buffer_ = malloc(total_buffer_len);
+    if (!quantizer.Enabled(global_state_->param_manager, entries[0], response)) {
+      // cudaHostAlloc is significantly slower than malloc.  Pre-allocating
+      // a buffer is not safe since the tensor can be arbitrarily large.
+      host_buffer_ = malloc(total_buffer_len);
 
-    // Synchronize.
-    cuda_context_->WaitForEvents(event_queue_, entries, timeline);
+      // Synchronize.
+      cuda_context_->WaitForEvents(event_queue_, entries, timeline);
 
-    // According to https://docs.nvidia.com/cuda/cuda-runtime-api/
-    // api-sync-behavior.html#api-sync-behavior__memcpy-async,
-    // cudaMemcpyAsync is synchronous with respect to the host, so we
-    // memcpy (effectively) synchronously to generate an accurate timeline
-    timeline.ActivityStartAll(entries, MEMCPY_IN_HOST_BUFFER);
-    cuda_context_->ErrorCheck("cudaMemcpyAsync",
-                              cudaMemcpyAsync(host_buffer_, buffer_data_at_rank_offset,
-                                              total_buffer_len, cudaMemcpyDeviceToHost,
-                                              *stream_));
-    timeline.ActivityEndAll(entries);
-
-    timeline.ActivityStartAll(entries, MPI_ALLREDUCE);
-    int op = MPI_Allreduce(MPI_IN_PLACE, host_buffer_,
-                           (int) total_num_elements,
-                           mpi_context_->GetMPIDataType(first_entry.tensor),
-                           mpi_context_->GetMPISumOp(first_entry.tensor->dtype()),
-                           mpi_context_->GetMPICommunicator(Communicator::CROSS));
-    if (op != MPI_SUCCESS) {
-      throw std::logic_error("MPI_Allreduce failed, see MPI output for details.");
+      // According to https://docs.nvidia.com/cuda/cuda-runtime-api/
+      // api-sync-behavior.html#api-sync-behavior__memcpy-async,
+      // cudaMemcpyAsync is synchronous with respect to the host, so we
+      // memcpy (effectively) synchronously to generate an accurate timeline
+      timeline.ActivityStartAll(entries, MEMCPY_IN_HOST_BUFFER);
+      cuda_context_->ErrorCheck("cudaMemcpyAsync",
+                                cudaMemcpyAsync(host_buffer_, buffer_data_at_rank_offset,
+                                                total_buffer_len, cudaMemcpyDeviceToHost,
+                                                *stream_));
+      timeline.ActivityEndAll(entries);
+      timeline.ActivityStartAll(entries, MPI_ALLREDUCE);
+      int op =
+          MPI_Allreduce(MPI_IN_PLACE, host_buffer_, (int)total_num_elements,
+                        mpi_context_->GetMPIDataType(first_entry.tensor),
+                        mpi_context_->GetMPISumOp(first_entry.tensor->dtype()),
+                        mpi_context_->GetMPICommunicator(Communicator::CROSS));
+      if (op != MPI_SUCCESS) {
+        throw std::logic_error(
+            "MPI_Allreduce failed, see MPI output for details.");
+      }
+      timeline.ActivityEndAll(entries);
+      timeline.ActivityStartAll(entries, MEMCPY_OUT_HOST_BUFFER);
+      cuda_context_->ErrorCheck("cudaMemcpyAsync",
+                                cudaMemcpyAsync(buffer_data_at_rank_offset, host_buffer_,
+                                                total_buffer_len, cudaMemcpyHostToDevice,
+                                                *stream_));
+      timeline.ActivityEndAll(entries);
+    } else {
+      int op = quantizer.MPI_Quantized_Allreduce(MPI_IN_PLACE, buffer_data_at_rank_offset,
+                                       (int) total_num_elements,
+                                       mpi_context_->GetMPICommunicator(Communicator::CROSS), entries);
+      if (op != MPI_SUCCESS) {
+        throw std::logic_error(
+            "Quantized Allreduce failed, see log for details.");
+      }
     }
-    timeline.ActivityEndAll(entries);
-
-    timeline.ActivityStartAll(entries, MEMCPY_OUT_HOST_BUFFER);
-    cuda_context_->ErrorCheck("cudaMemcpyAsync",
-                              cudaMemcpyAsync(buffer_data_at_rank_offset, host_buffer_,
-                                              total_buffer_len, cudaMemcpyHostToDevice,
-                                              *stream_));
-    timeline.ActivityEndAll(entries);
   }
 
   if (num_elements_per_rank > 0) {

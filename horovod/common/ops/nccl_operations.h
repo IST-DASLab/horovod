@@ -21,6 +21,7 @@
 
 #include "../mpi_context.h"
 #include "cuda_operations.h"
+#include "quantization.h"
 
 namespace horovod {
 namespace common {
@@ -65,6 +66,7 @@ public:
                const Response& response) const override;
 
 private:
+  SimpleQuantizer quantizer;
   void PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,
                                 Communicator& nccl_id_bcast_comm) override;
 };

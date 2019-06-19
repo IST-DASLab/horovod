@@ -53,7 +53,6 @@ public:
 protected:
   MPIContext* mpi_context_;
 
-private:
   int quantize_bucket_size; // the size of the bucket, should be the
                             // power of two and does not exceed 1024
   int64_t quantize_threshold;

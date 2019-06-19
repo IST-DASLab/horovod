@@ -578,6 +578,7 @@ def get_common_options(build_ext):
         MACROS += [('QUANTIZATION', '1')]
         SOURCES += ['horovod/common/ops/mpi_quantized_cuda_operations.cc']
         SOURCES += ['horovod/common/ops/cuda_functions.cu.cc']
+        SOURCES += ['horovod/common/ops/quantization.cc']
 
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
