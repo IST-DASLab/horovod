@@ -66,9 +66,10 @@ public:
                const Response& response) const override;
 
 private:
-  SimpleQuantizer quantizer;
+  MPI_Quantized_CUDAAllreduce* quantizer;
   void PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,
                                 Communicator& nccl_id_bcast_comm) override;
+
 };
 
 } // namespace common

@@ -27,9 +27,23 @@ namespace common {
 struct SimpleQuantizer: public MPI_Quantized_CUDAAllreduce {
   SimpleQuantizer(MPIContext* mpi_context, CUDAContext* cuda_context,
                   HorovodGlobalState* global_state);
-  void Init(std::vector<TensorTableEntry>& entries, int world_size);
+  Status Init(std::vector<TensorTableEntry>& entries, int world_size);
   int MPI_Quantized_Allreduce(void* sendbuf, void* recvbuf, int count,
-                              MPI_Comm comm, std::vector<TensorTableEntry>& entries);
+                              MPI_Comm comm, std::vector<TensorTableEntry>& entries, int buffer_len) override;
+  bool Enabled(
+      const ParameterManager& param_manager,
+      const TensorTableEntry& entry,
+      const Response& response) const;
+  Status Execute(
+      std::vector<horovod::common::TensorTableEntry>& entries,
+      const horovod::common::Response& response);
+
+  float* dequan_buffer1 = nullptr;
+  CurandState* cuda_states1 = nullptr;
+
+  unsigned char* quantized_gradients_send1;
+  unsigned char* quantized_gradients_recv1;
+
 };
 
 } // namespace common

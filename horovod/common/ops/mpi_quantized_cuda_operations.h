@@ -50,6 +50,9 @@ public:
               const TensorTableEntry& new_entry,
               const Response & new_response) const override;
   bool AcceptableEntry(const TensorTableEntry& entry) const;
+
+  virtual int MPI_Quantized_Allreduce(void* sendbuf, void* recvbuf, int num_elements,
+                              MPI_Comm comm, std::vector<TensorTableEntry>& entries, int buffer_len);
 protected:
   MPIContext* mpi_context_;
 
@@ -65,7 +68,7 @@ protected:
   FusionBufferManager bufferManager;
 
   float* dequan_buffer = nullptr;
-  curandState* cuda_states = nullptr;
+  CurandState* cuda_states = nullptr;
 
   float* maxandmin_send;
   float* maxandmin_recv;

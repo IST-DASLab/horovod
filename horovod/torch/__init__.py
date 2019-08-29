@@ -142,6 +142,8 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                 self._handles[p] = (handle, ctx)
         for p, (handle, _) in self._handles.items():
             output = synchronize(handle)
+            if torch.isnan(output).any():
+                print(p)
             self._allreduce_delay[p] = self.backward_passes_per_step
             p.grad.set_(self._compression.decompress(output, ctx))
         self._handles.clear()

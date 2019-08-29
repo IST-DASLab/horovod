@@ -631,7 +631,7 @@ def customize_compiler_for_nvcc(self):
     def _compile(obj, src, ext, cc_args, extra_postargs, pp_opts):
         if os.path.split(src)[1] == 'cuda_functions.cu.cc':
             # use the cuda for .cu files
-#            self.set_executable('compiler_so', ['/usr/local/cuda/9.0/bin/nvcc'])
+            # self.set_executable('compiler_so', ['/usr/local/cuda/9.0/bin/nvcc'])
             self.set_executable('compiler_so', ['nvcc'])
             # use only a subset of the extra_postargs, which are 1-1 translated
             # from the extra_compile_args in the Extension class

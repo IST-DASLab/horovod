@@ -28,6 +28,7 @@ Status FusionBufferManager::InitializeBuffer(int64_t threshold, int device, std:
     buffer.reset();
     size = 0;
   }
+
   if (buffer == nullptr) {
     on_start_init();
     size = threshold;

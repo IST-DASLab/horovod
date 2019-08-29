@@ -4,7 +4,16 @@
 
 #define maxThreadsPerBlock 1024
 
-__global__ void _init_curand(unsigned int seed, curandState* states) {
+
+__device__
+int toInt(unsigned char* z) {
+  return ((unsigned int) z[0] & 0xFF) << 24 |
+         ((unsigned int) z[1] & 0xFF) << 16 |
+         ((unsigned int) z[2] & 0xFF) << 8 |
+         ((unsigned int) z[3] & 0xFF);
+}
+
+__global__ void _init_curand(unsigned int seed, CurandState* states) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   /* we have to initialize the state */
   curand_init(seed,  /* the seed can be the same for each core, here we pass the
@@ -15,6 +24,11 @@ __global__ void _init_curand(unsigned int seed, curandState* states) {
               0, /* the offset is how much extra we advance in the sequence for
                     each call, can be 0 */
               &states[index]);
+
+//  unsigned char z[4];
+//  for  (int i = 0; i < 4; i++)
+//    z[i] = 128 + index % 128;
+//  states[index] = toInt(z);
 }
 
 __global__ void _add(int n, float* x, float* y) {
@@ -42,14 +56,42 @@ __global__ void _find_max_and_min_bucket_seq(float* x, float* maxandmin, int n,
   }
 }
 
+__device__
+void TausStep(unsigned char &z, unsigned int S1, unsigned int S2, int S3, unsigned M) {
+  unsigned b = (((z << S1) ^ z) >> S2);
+  z = (((z & M) << S3) ^ b);
+}
+
+__device__
+void LCGStep(unsigned char &z, unsigned A, unsigned C)
+{
+  z = (A * z + C);
+}
+
+__device__
+float HybridTaus(int& state) {
+  unsigned char z[4];
+  // present int as char array.
+  z[0] = (state >> 24) & 0xFF;
+  z[1] = (state >> 16) & 0xFF;
+  z[2] = (state >> 8) & 0xFF;
+  z[3] = state & 0xFF;
+  TausStep(z[0], 13, 19, 12, 4294967294UL);
+  TausStep(z[1], 2, 25, 4, 4294967288UL);
+  TausStep(z[2],  3, 11, 17, 4294967280UL);
+  LCGStep(z[3], 1664525, 1013904223UL);
+  state = toInt(z);
+  return (z[0] ^ z[1] ^ z[2] ^ z[3]) / 256.0;
+}
+
 __global__ void _quantize_value_bits(unsigned char* x, const float* y,
                                      const float* maxandmin, const int n,
                                      const int bits, const int bucket_size,
-                                     curandState* states) {
+                                     CurandState* states) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
 
-  curandState local_state;
+  CurandState local_state;
   local_state = states[index];
 
   int parts = 8 / bits;
@@ -61,8 +103,9 @@ __global__ void _quantize_value_bits(unsigned char* x, const float* y,
       int my_bucket = (i * parts + j) / bucket_size;
       float unit = (maxandmin[my_bucket * 2] - maxandmin[my_bucket * 2 + 1]) /
                    (divisor - 1);
-      float d = (y[i * parts + j] - maxandmin[my_bucket * 2 + 1]) /
-                unit + (curand(&local_state) % 1000001 / 1000000.0);
+      float d = (y[i * parts + j] - maxandmin[my_bucket * 2 + 1]) / unit
+//               + (curand(&local_state) % 100001) / 100000.0;
+                 + curand_uniform(&local_state);
       a += ((int)floor(d)) << (j * bits);
     }
     x[i] = (unsigned char)a;
@@ -90,14 +133,14 @@ __global__ void _dequantize_value_bits(unsigned char* recv, float* maxandmin,
 
 #define BLOCKS_PER_GRID(n) (n + (maxThreadsPerBlock - 1)) / maxThreadsPerBlock
 
-void GPU_init_curand(curandState* states, int num_elems, unsigned int seed,
+void GPU_init_curand(CurandState* states, int num_elems, unsigned int seed,
                      cudaStream_t stream) {
   _init_curand<<<BLOCKS_PER_GRID(num_elems), maxThreadsPerBlock, 0, stream>>>(
       seed, states);
 }
 
 int GPU_get_curand_array_size(int num_elems) {
-  return BLOCKS_PER_GRID(num_elems) * maxThreadsPerBlock * sizeof(curandState);
+  return BLOCKS_PER_GRID(num_elems) * maxThreadsPerBlock * sizeof(CurandState);
 }
 
 void GPU_add(int n, float* x, float* y, cudaStream_t stream) {
@@ -116,7 +159,7 @@ void GPU_find_max_and_min_bucket(float* x, float* maxandmin, int n,
 
 void GPU_quantize_value_bits(unsigned char* x, float* y, float* maxandmin,
                              int n, int bits, int bucket_size,
-                             curandState* states, cudaStream_t stream) {
+                             CurandState* states, cudaStream_t stream) {
   _quantize_value_bits<<<BLOCKS_PER_GRID(n), maxThreadsPerBlock, 0, stream>>>(
       x, y, maxandmin, n, bits, bucket_size, states);
   cudaStreamSynchronize(stream);
