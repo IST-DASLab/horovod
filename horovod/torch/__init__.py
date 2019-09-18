@@ -18,7 +18,6 @@ from __future__ import division
 from __future__ import print_function
 
 from horovod.common import check_extension
-from horovod.torch.mpi_ops import allreduce_time, communication_time
 
 try:
     check_extension('horovod.torch', 'HOROVOD_WITH_PYTORCH',
@@ -35,6 +34,7 @@ from horovod.torch.mpi_ops import poll, synchronize
 from horovod.torch.mpi_ops import init, shutdown
 from horovod.torch.mpi_ops import size, local_size, rank, local_rank
 from horovod.torch.mpi_ops import mpi_threads_supported
+from horovod.torch.mpi_ops import allreduce_time, communication_time, compression_time, meta_info_time
 
 import torch
 import collections
@@ -143,7 +143,11 @@ class _DistributedOptimizer(torch.optim.Optimizer):
         for p, (handle, _) in self._handles.items():
             output = synchronize(handle)
             if torch.isnan(output).any():
-                print(p)
+                print("Nan value")
+                import numpy as np
+                x = output.cpu().numpy()
+                print(np.argwhere(np.isnan(x)))
+
             self._allreduce_delay[p] = self.backward_passes_per_step
             p.grad.set_(self._compression.decompress(output, ctx))
         self._handles.clear()

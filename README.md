@@ -1,18 +1,5 @@
 # Horovod with quantization
-## Machines
 
-There are currently two machines with two gpus can be used to run horovod: dasgpu1.ist.local and dasgpu2.ist.local.
-Slightly later the 8 GPU machine das8gpu1.ista.local will be available.
-
-<!---
-## Installation guide
-
-At first, you have to ssh to one of the machine.
-
-The easiest and safest way to set up the work environment is the docker.
-It is currently installed on dasgpu1.ist.local and dasgpu2.ist.local.
-But before using the docker you have to ask the user with sudo access to add you
-into the docker user-list.
 
 ```bash
 $ mkdir horovod-docker

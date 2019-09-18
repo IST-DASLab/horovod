@@ -20,6 +20,7 @@
 #include "../common.h"
 #include "../global_state.h"
 #include "mpi_quantized_cuda_operations.h"
+#include "../compressor.h"
 
 namespace horovod {
 namespace common {
@@ -27,8 +28,8 @@ namespace common {
 struct SimpleQuantizer: public MPI_Quantized_CUDAAllreduce {
   SimpleQuantizer(MPIContext* mpi_context, CUDAContext* cuda_context,
                   HorovodGlobalState* global_state);
-  Status Init(std::vector<TensorTableEntry>& entries, int world_size);
-  int MPI_Quantized_Allreduce(void* sendbuf, void* recvbuf, int count,
+  // TODO: change int to Status.
+  Status MPI_Quantized_Allreduce(void* sendbuf, void* recvbuf, int count,
                               MPI_Comm comm, std::vector<TensorTableEntry>& entries, int buffer_len) override;
   bool Enabled(
       const ParameterManager& param_manager,
@@ -37,13 +38,10 @@ struct SimpleQuantizer: public MPI_Quantized_CUDAAllreduce {
   Status Execute(
       std::vector<horovod::common::TensorTableEntry>& entries,
       const horovod::common::Response& response);
+private:
+  Status Init(std::vector<TensorTableEntry>& entries, int num_elements, int world_size);
 
-  float* dequan_buffer1 = nullptr;
-  CurandState* cuda_states1 = nullptr;
-
-  unsigned char* quantized_gradients_send1;
-  unsigned char* quantized_gradients_recv1;
-
+  Compressor *compressor;
 };
 
 } // namespace common

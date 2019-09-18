@@ -161,3 +161,11 @@ class HorovodBasics(object):
     def communication_time(self):
         self.MPI_LIB_CTYPES.horovod_communication_time.restype = ctypes.c_longlong
         return self.MPI_LIB_CTYPES.horovod_communication_time()
+
+    def compression_time(self):
+        self.MPI_LIB_CTYPES.horovod_compression_time.restype = ctypes.c_longlong
+        return self.MPI_LIB_CTYPES.horovod_compression_time()
+
+    def meta_info_time(self):
+        self.MPI_LIB_CTYPES.horovod_metainfo_time.restype = ctypes.c_longlong
+        return self.MPI_LIB_CTYPES.horovod_metainfo_time()

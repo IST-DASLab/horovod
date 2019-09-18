@@ -125,6 +125,10 @@ struct HorovodGlobalState {
   // Communication time field
   int64_t communication_time = 0;
 
+  int64_t compression_time = 0;
+
+  int64_t meta_info_time = 0;
+
   ~HorovodGlobalState() {
     // Make sure that the destructor of the background thread is safe to
     // call. If a thread is still joinable (not detached or complete) its

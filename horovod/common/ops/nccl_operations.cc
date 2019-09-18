@@ -52,7 +52,7 @@ NCCLAllreduce::NCCLAllreduce(NCCLContext* nccl_context,
 
 Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
   auto& first_entry = entries[0];
-
+  global_state_->compression_time = now();
   InitCUDA(entries);
   InitNCCLComm(entries, response.devices());
   InitCUDAQueue(entries, response);
@@ -78,7 +78,6 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Resp
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();
   }
-
   // Do allreduce.
   auto nccl_result = ncclAllReduce(fused_input_data, buffer_data,
                                    (size_t) num_elements,
@@ -332,11 +331,11 @@ Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries
                                                 *stream_));
       timeline.ActivityEndAll(entries);
     } else {
-      int op = quantizer->MPI_Quantized_Allreduce(MPI_IN_PLACE, buffer_data_at_rank_offset,
+      Status status = quantizer->MPI_Quantized_Allreduce(MPI_IN_PLACE, buffer_data_at_rank_offset,
                                        (int) total_num_elements,
                                        mpi_context_->GetMPICommunicator(Communicator::CROSS),
                                        entries, (int) total_num_elements * sizeof(float));
-      if (op != MPI_SUCCESS) {
+      if (!status.ok()) {
         throw std::logic_error(
             "Quantized Allreduce failed, see log for details.");
       }

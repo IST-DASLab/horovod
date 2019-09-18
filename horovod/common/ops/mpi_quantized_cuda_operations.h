@@ -40,8 +40,6 @@ public:
   Status Execute(std::vector<TensorTableEntry>& entries,
                  const Response& response) override;
 
-  Status Init(const std::vector<horovod::common::TensorTableEntry>& entries);
-
   bool Enabled(const ParameterManager& param_manager,
                const TensorTableEntry& entry,
                const Response& response) const override;
@@ -51,7 +49,7 @@ public:
               const Response & new_response) const override;
   bool AcceptableEntry(const TensorTableEntry& entry) const;
 
-  virtual int MPI_Quantized_Allreduce(void* sendbuf, void* recvbuf, int num_elements,
+  virtual Status MPI_Quantized_Allreduce(void* sendbuf, void* recvbuf, int num_elements,
                               MPI_Comm comm, std::vector<TensorTableEntry>& entries, int buffer_len);
 protected:
   MPIContext* mpi_context_;
@@ -74,6 +72,9 @@ protected:
   float* maxandmin_recv;
   unsigned char* quantized_gradients_send;
   unsigned char* quantized_gradients_recv;
+
+private:
+  Status Init(const std::vector<horovod::common::TensorTableEntry>& entries);
 };
 
 } // namespace common

@@ -40,7 +40,11 @@ namespace common {
 #define HOROVOD_STALL_CHECK_DISABLE "HOROVOD_STALL_CHECK_DISABLE"
 #define HOROVOD_HIERARCHICAL_ALLREDUCE "HOROVOD_HIERARCHICAL_ALLREDUCE"
 #define HOROVOD_HIERARCHICAL_ALLGATHER "HOROVOD_HIERARCHICAL_ALLGATHER"
+#define HOROVOD_COMPRESSOR "HOROVOD_COMPRESSOR"
+#define HOROVOD_COMPRESSION_BUCKET_SIZE "HOROVOD_QUANTIZE_BUCKET_SIZE"
 #define HOROVOD_QUANTIZATION "HOROVOD_QUANTIZATION"
+#define HOROVOD_QUANTIZATION_TYPE "HOROVOD_QUANTIZATION_TYPE"
+#define HOROVOD_TOPK "HOROVOD_TOPK"
 
 // Check that Horovod is initialized.
 Status CheckInitialized();
@@ -83,6 +87,11 @@ int64_t horovod_allreduce_time();
 // C interface to return the time spent in nanoseconds onto the communication
 // Returns 0 if Horovod is not initialized.
 int64_t horovod_communication_time();
+
+int64_t horovod_compression_time();
+
+int64_t horovod_metainfo_time();
+
 }
 
 Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,

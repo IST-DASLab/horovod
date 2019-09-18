@@ -140,7 +140,8 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   auto horovod_ha = std::getenv(HOROVOD_HIERARCHICAL_ALLREDUCE);
   if (horovod_ha == nullptr || std::strtol(horovod_ha, nullptr, 10) == 0) {
     std::cout << "Create non-hierarchical" << std::endl;
-    long q = std::strtol(horovod_q, nullptr, 10);
+    long q = (horovod_q == nullptr) ? 0:
+        std::strtol(horovod_q, nullptr, 10);
       if (q == 0)
         allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
             new SimpleQuantizer(&mpi_context, &cuda_context, &state)));
@@ -1417,6 +1418,20 @@ int64_t horovod_communication_time() {
     return 0;
   }
   return horovod_global.communication_time;
+}
+
+int64_t horovod_compression_time() {
+  if (!horovod_global.initialization_done) {
+    return 0;
+  }
+  return horovod_global.compression_time;
+}
+
+int64_t horovod_metainfo_time() {
+  if (!horovod_global.initialization_done) {
+    return 0;
+  }
+  return horovod_global.meta_info_time;
 }
 }
 

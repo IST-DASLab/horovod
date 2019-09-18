@@ -48,6 +48,8 @@ local_rank = _basics.local_rank
 mpi_threads_supported = _basics.mpi_threads_supported
 allreduce_time = _basics.allreduce_time
 communication_time = _basics.communication_time
+compression_time = _basics.compression_time
+meta_info_time = _basics.meta_info_time
 
 
 # Schema: handle -> input, output
