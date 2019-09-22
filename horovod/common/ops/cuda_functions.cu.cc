@@ -82,10 +82,12 @@ __global__ void _find_Linf_bucket_seq(const float* x, float* norms, int n,
   unsigned int stride = gridDim.x * blockDim.x;
 
   for (int i = index; i < (n + bucket_size - 1) / bucket_size; i += stride) {
-    float bmax = x[i * bucket_size];
+    float bmax = fabsf(x[i * bucket_size]);
     for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
-      bmax = fmaxf(bmax, x[j]);
+      bmax = fmaxf(bmax, fabsf(x[j]));
     }
+    if (fabsf(bmax) < EPS)
+      bmax += EPS;
     norms[i] = bmax;
   }
 }
