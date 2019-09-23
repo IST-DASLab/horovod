@@ -175,11 +175,12 @@ Status SimpleQuantizer::MPI_Quantized_Allreduce(void* sendbuf, void* recvbuf, in
               &requests.back());
     count++;
   }
+  compressor->Decompress(quantized_gradients_send, recvbuf);
   MPI_Waitall((int)requests.size(), &requests[0],
               MPI_STATUSES_IGNORE);
   global_state_->communication_time += now() - start;
   HERE
-  compressor->Decompress(quantized_gradients_send, recvbuf);
+//  printDebug((float*) recvbuf);
   for (int i = 0; i < world_size - 1; i++) {
     compressor->Decompress(quantized_gradients_recv + i * compressed_size,
         dequan_buffer);

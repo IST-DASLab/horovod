@@ -273,7 +273,7 @@ Status NormL2Quantizer::Init(
 
   if (levels_ == nullptr) {
     int num_levels = 1 << (bits_ - 1);
-    // In case of L2 normalization we can do following euristic.
+    // In case of L2 normalization we can do following heuristic.
     // We store save min power of multiplier that is more than evey normalized value in bucket
     // and quantize starting with this power not with 1. With that we can achieve better accuracy, e.g. there is no need
     // to quantize starting 0.5 point because it's likely no values lie in range [0.5, 1.0].

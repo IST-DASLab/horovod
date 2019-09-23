@@ -27,7 +27,7 @@ void CUDA_quantize_value_bits(unsigned char* y, const float* x,
                               cudaStream_t stream);
 void CUDA_dequantize_value_bits(const unsigned char* y, const float* maxandmin,
                                 float* x, int n, int bits, int bucket_size,
-                                cudaStream_t& stream);
+                                cudaStream_t stream);
 void CUDA_Linf_normalized_quantize_values(unsigned char* y, const float* x,
                                           const float* norms, const float* levels,
                                           int n, int bits, int bucket_size,

@@ -25,8 +25,8 @@ namespace common {
 #define COMPRESSION_BUCKET_SIZE 512
 
 bool MPI_Quantized_CUDAAllreduce::AcceptableEntry(const TensorTableEntry& entry) const {
-  return entry.tensor->size() >= (quantize_threshold * sizeof(float));
-//  return entry.tensor_name.find("conv") == std::string::npos && entry.tensor->size() >= (quantize_threshold * sizeof(float));
+//  return entry.tensor->size() >= (quantize_threshold * sizeof(float));
+  return entry.tensor_name.find("bias") == std::string::npos && entry.tensor->size() >= (quantize_threshold * sizeof(float));
 }
 
 bool MPI_Quantized_CUDAAllreduce::Enabled(

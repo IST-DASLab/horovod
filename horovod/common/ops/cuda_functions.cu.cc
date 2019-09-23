@@ -259,7 +259,7 @@ __global__ void _quantize_Linf_normalized(unsigned char *y, const float* x,
       unsigned char level_idx = 0;
       while (level_idx + 1 < num_levels) {
         if (d - levels[level_idx + 1] < EPS) {
-          if (d + (d - levels[level_idx]) * rand - levels[level_idx + 1] > EPS) {
+          if (d + (levels[level_idx + 1] - levels[level_idx]) * rand - levels[level_idx + 1] > EPS) {
             level_idx++;
           }
           break;
@@ -320,7 +320,7 @@ __global__ void _quantize_L2_normalized(unsigned char *y, const float* x,
 
       while (level_idx + 1 < num_levels) {
         if (d - levels[offset - (level_idx + 1)] < EPS) {
-          if (d + (d - levels[offset - level_idx]) * rand - levels[offset - (level_idx + 1)] > EPS) {
+          if (d + (levels[offset - (level_idx + 1)] - levels[offset - level_idx]) * rand - levels[offset - (level_idx + 1)] > EPS) {
             level_idx++;
           }
           break;
@@ -426,7 +426,7 @@ void CUDA_quantize_value_bits(unsigned char* y, const float* x,
 
 void CUDA_dequantize_value_bits(const unsigned char* y, const float* maxandmin,
                                 float* x, int n, int bits, int bucket_size,
-                                cudaStream_t& stream) {
+                                cudaStream_t stream) {
   _dequantize_value_bits<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(
           y, maxandmin, x, n, bits, bucket_size);
   cudaStreamSynchronize(stream);
