@@ -34,7 +34,7 @@ RUN curl -O https://bootstrap.pypa.io/get-pip.py && \
     rm get-pip.py
 
 # Install TensorFlow, Keras, PyTorch and MXNet
-RUN pip install 'numpy<1.15.0' tensorflow-gpu==${TENSORFLOW_VERSION} keras h5py torch==${PYTORCH_VERSION} torchvision ${MXNET_URL}
+RUN pip install 'numpy<1.15.0' h5py torch==${PYTORCH_VERSION} torchvision
 
 # Install Open MPI
 RUN mkdir /tmp/openmpi && \
@@ -48,9 +48,14 @@ RUN mkdir /tmp/openmpi && \
     ldconfig && \
     rm -rf /tmp/openmpi
 
+# Copy sources to build
+ADD . /horovod
+
 # Install Horovod, temporarily using CUDA stubs
 RUN ldconfig /usr/local/cuda-9.0/targets/x86_64-linux/lib/stubs && \
-    HOROVOD_GPU_ALLREDUCE=NCCL HOROVOD_WITH_TENSORFLOW=1 HOROVOD_WITH_PYTORCH=1 HOROVOD_WITH_MXNET=1 pip install --no-cache-dir horovod && \
+    cd /horovod && \
+    HOROVOD_GPU_ALLREDUCE=MPI HOROVOD_WITHOUT_TENSORFLOW=1 HOROVOD_WITH_PYTORCH=1 HOROVOD_WITHOUT_MXNET=1 HOROVOD_QUANTIZATION=1 pip install --no-cache-dir . && \
+    ln -s /horovod/bin/horovodrun /usr/local/bin/horovodrun && \
     ldconfig
 
 # Install OpenSSH for MPI to communicate between containers
@@ -63,8 +68,8 @@ RUN cat /etc/ssh/ssh_config | grep -v StrictHostKeyChecking > /etc/ssh/ssh_confi
     mv /etc/ssh/ssh_config.new /etc/ssh/ssh_config
 
 # Download examples
-RUN apt-get install -y --no-install-recommends subversion && \
-    svn checkout https://github.com/horovod/horovod/trunk/examples && \
-    rm -rf /examples/.svn
+#RUN apt-get install -y --no-install-recommends subversion && \
+#    svn checkout https://github.com/horovod/horovod/trunk/examples && \
+#    rm -rf /examples/.svn
 
-WORKDIR "/examples"
+WORKDIR "/horovod/examples"

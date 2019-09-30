@@ -1,105 +1,19 @@
 # Horovod with quantization
-## Machines
-
-There are currently two machines with two gpus can be used to run horovod: dasgpu1.ist.local and dasgpu2.ist.local.
-Slightly later the 8 GPU machine das8gpu1.ista.local will be available.
-
-<!---
 ## Installation guide
 
-At first, you have to ssh to one of the machine.
-
-The easiest and safest way to set up the work environment is the docker.
-It is currently installed on dasgpu1.ist.local and dasgpu2.ist.local.
-But before using the docker you have to ask the user with sudo access to add you
-into the docker user-list.
-
+### Docker
 ```bash
-$ mkdir horovod-docker
-$ wget -O horovod-docker/Dockerfile https://raw.githubusercontent.com/IST-DASLab/horovod/master/Dockerfile
-$ docker build -t horovod:latest horovod-docker
+$ docker build -t horovod:qsgd .
+$ nvidia-docker run -it --rm --name hvd_test horovod:qsgd
 ```
 
-This build can take a while because it downloads several libraries and build openmpi from scratch.
+### Local machine
+Prerequisites are the same as for horovod. See [Install](#install).
 
-Then you simply have to git clone the repository [https://github.com/IST-DASLab/horovod.git](https://github.com/IST-DASLab/horovod.git)
-somewhere in you home directory.
--->
-## Execution guide
-
-At first you have to ssh on one of the machines.
-
-Then, you should choose the docker image and start it.
-
-``` bash
-$ docker image ls
- REPOSITORY          TAG                     IMAGE ID            CREATED             SIZE
- horovod-4.0.0       latest                  0846939dd5e4        20 hours ago        7.58GB
-$ nvidia-docker run -v /home/username/work:/mnt/work -it horovod-4.0.0
-```
-
-On dasgpu1.ist.local the image is horovod-4.0.0 on dasgpu2.ist.local the image is simply horovod.
-Moreover, you should note two things. At first, we run nvidia-docker for the cuda support.
-Secondly, the docker is run in a different workspace so you have to mount your work directory,
-if you want to work with your files. For example, in the command above we mount the work folder
-of the user to /mnt/work/ in the docker.
-
-Then you have to build the custom (this) version of the horovod, because initially docker contains
-the original version of the horovod.
-For that I suggest to run the following command in the root of the cloned project.
-
+Building:
 ```bash
-$ HOROVOD_GPU_ALLREDUCE=MPI HOROVOD_WITHOUT_PYTORCH=1 HOROVOD_WITHOUT_MXNET=1 HOROVOD_QUANTIZATION=1 pip -v install .
+$ HOROVOD_GPU_ALLREDUCE=MPI HOROVOD_WITHOUT_TENSORFLOW=1 HOROVOD_WITH_PYTORCH=1 HOROVOD_WITHOUT_MXNET=1 HOROVOD_QUANTIZATION=1 pip install --no-cache-dir .
 ```
-
-This line installs horovod only for tensorflow (we unset pytorch and mxnet). This version uses GPU mpi allreduce and quantization.
-
-The execution after the installation is straightforward.
-In the root of the horovod project you have to run the following line.
-
-```bash
-$ mpirun --allow-run-as-root -np 2 -H localhost:2 python examples/tensorflow_mnist.py
-```
-
-This will run the code on two GPUs.
-
-## Execution guide on das8gpu1
-
-At first, you have to load module horovod/0.16.0f with all necessary requirements.
-
-```bash
-module load horovod/0.16.0f
-```
-
-Then you have to build the new virtual environment for python.
-
-```bash
-python3 -m venv ~/horovod-venv/
-source ~/horovod-venv/bin/activate
-pip install tensorflow==1.12.0 tensorflow-gpu==1.12.0
-```
-
-Now, you are ready to build horovod as explained in the previous section.
-
-## More experiments
-
-You can decide to run the code on cifar-10 or imagenet.
-
-To run on cifar-10 you can copy the prepared data set from
-/home/vaksenov/work/horovod_mine/cifar-10/cifar-10-batches-py and patched
-tensorlow benchmarking from /home/vaksenov/work/tensorflow-benchmarks.
-
-```bash
-$ mpirun --allow-run-as-root -np 2 -H localhost:2 python /mnt/work/tensorflow-benchmarks/scripts/tf_cnn_benchmarks/tf_cnn_benchmarks.py \
-  --model alexnet --batch_size 64 --variable_update horovod --quantization_bits 8 --gpu_memory_frac_for_testing 0.8 \
-  --data_name cifar10 --data_dir /mnt/work/horovod_mine/cifar-10/cifar-10-batches-py/
-```
-
-## Some notes about the code base
-
-Quantized version of the mpi allreduce is written in horovod/common/ops/mpi_quantized_cuda_operations.(cc|h)
-together with cuda operations in horovod/common/ops/cuda_functions.(cu.cc|h).
-This version is called in horovod/common/operations.cc Line 139. 
 
 
 # Horovod
