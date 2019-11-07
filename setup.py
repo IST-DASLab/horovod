@@ -576,11 +576,13 @@ def get_common_options(build_ext):
         LIBRARY_DIRS += cuda_lib_dirs
         LIBRARIES += ['cudart']
 
-    if have_cuda and quantization:
-        MACROS += [('QUANTIZATION', '1')]
-        SOURCES += ['horovod/common/ops/mpi_quantized_cuda_operations.cc']
-        SOURCES += ['horovod/common/ops/cuda_functions.cu.cc']
-        SOURCES += ['horovod/common/ops/quantization.cc']
+        if quantization:
+            MACROS += [('QUANTIZATION', '1')]
+            SOURCES += ['horovod/common/ops/cuda_functions.cu.cc']
+            SOURCES += ['horovod/common/ops/reducers/compressed_reducer.cc']
+            SOURCES += ['horovod/common/ops/reducers/all_broadcast.cc']
+            SOURCES += ['horovod/common/ops/reducers/scatter_allgather.cc']
+            SOURCES += ['horovod/common/ops/reducers/ring.cc']
 
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]

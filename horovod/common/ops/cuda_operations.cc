@@ -170,7 +170,7 @@ Status CUDAAllreduce::FinalizeCUDAQueue(const std::vector<TensorTableEntry>& ent
     cuda_context->ErrorCheck("cudaSetDevice", cuda_result);
 
     cuda_context->WaitForEvents(event_queue, entries, timeline);
-    global_state->allreduce_time += now() - global_state->compression_time;
+    global_state->allreduce_time += now() - global_state->nccl_start_time;
     if (host_buffer != nullptr) {
       free(host_buffer);
     }

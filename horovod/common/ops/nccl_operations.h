@@ -21,7 +21,7 @@
 
 #include "../mpi_context.h"
 #include "cuda_operations.h"
-#include "quantization.h"
+#include "reducers/compressed_reducer.h"
 
 namespace horovod {
 namespace common {
@@ -66,7 +66,7 @@ public:
                const Response& response) const override;
 
 private:
-  MPI_Quantized_CUDAAllreduce* quantizer;
+  std::vector<MPI_CUDACompressedReducer*> inter_nodes_reducers;
   void PopulateNCCLCommStrategy(int& nccl_rank, int& nccl_size,
                                 Communicator& nccl_id_bcast_comm) override;
 

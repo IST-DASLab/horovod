@@ -30,12 +30,12 @@
 namespace horovod {
 namespace common {
 
-class MPI_Quantized_CUDAAllreduce : public CUDAAllreduce {
+class MPI_CUDAScatterAllgatherReducer : public MPI_CUDACompressedReducer {
 public:
-  MPI_Quantized_CUDAAllreduce(MPIContext* mpi_context,
+  MPI_CUDAScatterAllgatherReducer(MPIContext* mpi_context,
                               CUDAContext* cuda_context,
                               HorovodGlobalState* global_state);
-  virtual ~MPI_Quantized_CUDAAllreduce() = default;
+  virtual ~MPI_CUDAScatterAllgatherReducer() = default;
 
   Status Execute(std::vector<TensorTableEntry>& entries,
                  const Response& response) override;
@@ -70,8 +70,8 @@ protected:
 
   float* maxandmin_send;
   float* maxandmin_recv;
-  unsigned char* quantized_gradients_send;
-  unsigned char* quantized_gradients_recv;
+  unsigned char* gradients_send;
+  unsigned char* gradients_recv;
 
 private:
   Status Init(const std::vector<horovod::common::TensorTableEntry>& entries);

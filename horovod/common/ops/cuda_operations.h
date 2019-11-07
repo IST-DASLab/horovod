@@ -26,6 +26,7 @@
 
 namespace horovod {
 namespace common {
+#define ALIGNMENT_UNIT 2 * sizeof(float)
 
 struct CUDAContext {
   cudaError_t GetCudaEvent(cudaEvent_t* event);

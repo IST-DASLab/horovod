@@ -13,67 +13,84 @@ const float DEFAULT_TOPK = 0.1;
 
 class Compressor {
 public:
-  Compressor(CUDAContext *cuda_context);
-  // Returns size of buffer to pass in compress (in bytes)
-  virtual int64_t BufferSize() = 0;
+  Compressor();
+  // Returns size of buffer to allocate for usage in compress (in bytes). We assume that no compression will be done in-place.
+  virtual int64_t BufferSize(int chunk_size) = 0;
   // Returns size of meaningful data inside data (in bytes).
-  virtual int64_t Compress(void *input_data, void *compressed_data) = 0;
-  virtual void Decompress(void *compressed_data, void *decompressed_data) = 0;
+  virtual int64_t Compress(unsigned char* input_data, void** output_p,
+                           int64_t num_elems) = 0;
+  virtual void Decompress(unsigned char* input, void** output_p,
+                          int64_t num_elems) = 0;
   // Correct input_data based on compression.
-  virtual void Correct(void *input_data) = 0;
-  virtual Status Init(HorovodGlobalState* globalState, int num_elements,
-                      std::vector<TensorTableEntry>& entries) = 0;
+  virtual void Correct(void* input_data, int num_elems) = 0;
+  virtual Status Init(HorovodGlobalState* globalState,
+                      const std::vector<TensorTableEntry>& entries) = 0;
   int64_t meta_info_time = 0;
   int64_t compression_time = 0;
 protected:
-  CUDAContext *cuda_context_;
   // The size of the bucket.
   int bucket_size_;
-
 };
 
-class Quantizer: public Compressor {
+class DummyCompressor: public Compressor {
 public:
-  Quantizer(CUDAContext *cuda_context):Compressor(cuda_context){}
-  int64_t BufferSize() override
-  { return allocate_buffer_size_; }
-  // No need in correction
-  void Correct(void *input_data) override {}
+  DummyCompressor():Compressor(){}
 
-  Status Init(HorovodGlobalState* globalState, int num_elements,
-              std::vector<TensorTableEntry>& entries) override;
+  int64_t BufferSize(int chunk_size) override { return chunk_size; }
+  // No need in correction
+  void Correct(void* input_data, int num_elems) override {}
+  int64_t Compress(unsigned char* input_data, void** output_p,
+                   int64_t num_elems) override;
+  void Decompress(unsigned char* input, void** output_p,
+                  int64_t num_elems) override;
+  Status Init(HorovodGlobalState* globalState,
+              const std::vector<TensorTableEntry>& entries) override {
+    return Status::OK();}
+};
+
+class CUDACompressor: public Compressor {
+public:
+  CUDACompressor(CUDAContext *cuda_context): Compressor(), cuda_context_(cuda_context){}
+  // Returns size of buffer to pass in compress (in bytes)
+protected:
+  CUDAContext *cuda_context_;
+};
+
+
+class CUDAQuantizer: public CUDACompressor {
+public:
+  CUDAQuantizer(CUDAContext *cuda_context, HorovodGlobalState* global_state);
+  // No need in correction
+  void Correct(void* input_data, int num_elems) override {}
+
+  Status Init(HorovodGlobalState* globalState,
+              const std::vector<TensorTableEntry>& entries) override;
 protected:
   CurandState* cuda_states_ = nullptr;
-  // Size of previously processed chunk
-  int64_t prev_chunk_size_ = -1;
-  // Number of elements in chunk.
-  int num_elements_;
-  // Size of buffer used for any chunk
-  int64_t allocate_buffer_size_;
   int device_;
   // Number of bits used per value.
   int bits_;
   FusionBufferManager bufferManager_;
-  int64_t meta_buffer_size_;
+private:
+  size_t curand_array_size;
 };
 
-class MaxMinQuantizer: public Quantizer {
+class CUDAMaxMinQuantizer: public CUDAQuantizer {
 public:
-  MaxMinQuantizer(CUDAContext *cuda_context): Quantizer(cuda_context){
-    std::cout << "MaxMinQuantizer" << std::endl;
-  }
-  int64_t Compress(void *input_data, void *compressed_data) override;
-  void Decompress(void *compressed_data, void *decompressed_data) override;
-
-  Status Init(HorovodGlobalState* globalState, int num_elements,
-              std::vector<TensorTableEntry>& entries) override;
+  CUDAMaxMinQuantizer(CUDAContext *cuda_context,
+                                           HorovodGlobalState* global_state): CUDAQuantizer(cuda_context, global_state){}
+  int64_t Compress(unsigned char* input_data, void** output_p,
+                   int64_t num_elems) override;
+  void Decompress(unsigned char* input, void** output_p,
+                  int64_t num_elems) override;
+  int64_t BufferSize(int chunk_size) override;
 };
 
-class NormalizedQuantizer: public Quantizer {
+class CUDANormalizedQuantizer: public CUDAQuantizer {
 public:
-  explicit NormalizedQuantizer(CUDAContext *cuda_context):Quantizer(cuda_context), multiplier_(-1.0){}
-  NormalizedQuantizer(CUDAContext *cuda_context, float multiplier):Quantizer(cuda_context), multiplier_(multiplier){}
-  friend NormalizedQuantizer *CreateNormalized(CUDAContext *cuda_context);
+  explicit CUDANormalizedQuantizer(CUDAContext *cuda_context, HorovodGlobalState* global_state):CUDAQuantizer(cuda_context, global_state), multiplier_(-1.0){}
+  CUDANormalizedQuantizer(CUDAContext *cuda_context, HorovodGlobalState* global_state, float multiplier):CUDAQuantizer(cuda_context, global_state), multiplier_(multiplier){}
+  friend CUDANormalizedQuantizer *CreateCUDANormalized(CUDAContext* cuda_context, HorovodGlobalState* global_state);
 
 protected:
   enum NormalizationType {
@@ -86,42 +103,36 @@ protected:
   float multiplier_ = QUANTIZE_MULTIPLIER;
 };
 
-NormalizedQuantizer *CreateNormalized(CUDAContext *cuda_context);
+CUDANormalizedQuantizer *CreateCUDANormalized(CUDAContext* cuda_context, HorovodGlobalState* global_state);
 
-class NormLinfQuantizer: public NormalizedQuantizer {
+class CUDANormLinfQuantizer: public CUDANormalizedQuantizer {
 public:
-    NormLinfQuantizer(CUDAContext *cuda_context): NormalizedQuantizer(cuda_context){}
-    NormLinfQuantizer(CUDAContext *cuda_context, float multiplier): NormalizedQuantizer(cuda_context, multiplier){}
-    int64_t Compress(void *input_data, void *compressed_data) override;
-    void Decompress(void *compressed_data, void *decompressed_data) override;
-    Status Init(HorovodGlobalState* globalState, int num_elements,
-                std::vector<TensorTableEntry>& entries) override;
+  CUDANormLinfQuantizer(CUDAContext *cuda_context,
+                                               HorovodGlobalState* global_state): CUDANormalizedQuantizer(cuda_context, global_state){}
+  CUDANormLinfQuantizer(CUDAContext *cuda_context,
+                                               HorovodGlobalState* global_state, float multiplier): CUDANormalizedQuantizer(cuda_context, global_state, multiplier){}
+  int64_t Compress(unsigned char* input_data, void** output_p,
+                   int64_t num_elems) override;
+  void Decompress(unsigned char* input, void** output_p,
+                  int64_t num_elems) override;
+  Status Init(HorovodGlobalState* globalState,
+              const std::vector<TensorTableEntry>& entries) override;
+    int64_t BufferSize(int chunk_size) override;
 };
 
-class NormL2Quantizer: public NormalizedQuantizer {
+class CUDANormL2Quantizer: public CUDANormalizedQuantizer {
 public:
-    NormL2Quantizer(CUDAContext *cuda_context, float multiplier): NormalizedQuantizer(cuda_context, multiplier){}
-    int64_t Compress(void *input_data, void *output) override;
-    void Decompress(void *compressed_data, void *decompressed_data) override;
-    Status Init(HorovodGlobalState* globalState, int num_elements,
-                std::vector<TensorTableEntry>& entries) override;
-
-private:
-    // Size of buffer with L2 norms in meta info buffer.
-    int norm_buffer_size_;
+  CUDANormL2Quantizer(
+      horovod::common::CUDAContext* cuda_context, HorovodGlobalState* global_state, float multiplier): CUDANormalizedQuantizer(cuda_context, global_state, multiplier){}
+  int64_t Compress(unsigned char* input_data, void** output,
+                   int64_t num_elems) override;
+  void Decompress(unsigned char* input, void** output_p,
+                  int64_t num_elems) override;
+  Status Init(HorovodGlobalState* globalState,
+              const std::vector<TensorTableEntry>& entries) override;
+    int64_t BufferSize(int chunk_size) override;
 };
-// Not implemented
-class TopKcompressor: public Compressor {
-public:
-  TopKcompressor(CUDAContext* cudaContext):Compressor(cudaContext){}
 
-protected:
-  // TODO: move all constants, defaults to one place.
-  float taken_amount = 0.1; // aka k
-  Status Init(HorovodGlobalState* globalState, int num_elements,
-              std::vector<TensorTableEntry>& entries) override;
-
-};
 } // namespace common
 } // namespace horovod
 #endif // HOROVOD_COMPRESSOR_H

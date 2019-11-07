@@ -13,17 +13,17 @@ __device__ int toInt(unsigned char* z) {
 __global__ void _init_curand(unsigned int seed, CurandState* states) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   /* we have to initialize the state */
-  //  curand_init(seed,  /* the seed can be the same for each core, here we pass
-  //  the
-  //                        time in from the CPU */
-  //              index, /* the sequence number should be different for each
-  //              core
-  //                        (unless you want all cores to get the same sequence
-  //                        of numbers for some reason - use thread id! */
-  //              0, /* the offset is how much extra we advance in the sequence
-  //              for
-  //                    each call, can be 0 */
-  //              &states[index]);
+//    curand_init(seed,  /* the seed can be the same for each core, here we pass
+//    the
+//                          time in from the CPU */
+//                index, /* the sequence number should be different for each
+//                core
+//                          (unless you want all cores to get the same sequence
+//                          of numbers for some reason - use thread id! */
+//                0, /* the offset is how much extra we advance in the sequence
+//                for
+//                      each call, can be 0 */
+//                &states[index]);
 
   unsigned char z[4];
   for (int i = 0; i < 4; i++)
@@ -166,7 +166,7 @@ __global__ void _quantize_value_bits(unsigned char *y, const float* x,
                    (divisor - 1);
       float d = (x[i * parts + j] - maxandmin[my_bucket * 2 + 1]) / unit
                 //               + (curand(&local_state) % 100001) / 100000.0;
-                //                 + curand_uniform(&local_state);
+//                                 + curand_uniform(&local_state);
                 + HybridTaus(&local_state);
       a += ((int)floor(d)) << (j * bits);
     }
@@ -250,7 +250,7 @@ __global__ void _quantize_Linf_normalized(unsigned char *y, const float* x,
     for (int j = 0; j < parts && i * parts + j < n; j++) {
       int my_bucket = (i * parts + j) / bucket_size;
       float rand =
-          //curand_uniform(&local_state);
+//          curand_uniform(&local_state);
           HybridTaus(&local_state);
 
       float d = x[i * parts + j] / norm[my_bucket];
@@ -266,11 +266,14 @@ __global__ void _quantize_Linf_normalized(unsigned char *y, const float* x,
         }
         level_idx++;
       }
+//      if (i * parts + j < 8)
+//        printf("%i %f %f ", level_idx, levels[level_idx], levels[level_idx] * norm[my_bucket]);
       level_idx |= (sign << (bits - 1));
       a += (level_idx << (j * bits));
     }
     y[i] = (unsigned char)a;
   }
+//  printf("\n");
   states[index] = local_state;
 }
 
@@ -309,9 +312,8 @@ __global__ void _quantize_L2_normalized(unsigned char *y, const float* x,
     for (int j = 0; j < parts && i * parts + j < n; j++) {
       int my_bucket = (i * parts + j) / bucket_size;
       float rand =
-              //curand_uniform(&local_state);
+//              curand_uniform(&local_state);
               HybridTaus(&local_state);
-
       float d = x[i * parts + j] / norm[my_bucket];
       char sign = (d < -EPS);
       d = fabsf(d);

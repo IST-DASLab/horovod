@@ -15,6 +15,11 @@
 // =============================================================================
 
 #include "nccl_operations.h"
+#if QUANTIZATION
+#include "reducers/all_broadcast.h"
+#include "reducers/scatter_allgather.h"
+#include "reducers/ring.h"
+#endif
 
 namespace horovod {
 namespace common {
@@ -52,11 +57,10 @@ NCCLAllreduce::NCCLAllreduce(NCCLContext* nccl_context,
 
 Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
   auto& first_entry = entries[0];
-  global_state_->compression_time = now();
+  global_state_->nccl_start_time = now();
   InitCUDA(entries);
   InitNCCLComm(entries, response.devices());
   InitCUDAQueue(entries, response);
-
   const void* fused_input_data;
   void* buffer_data;
   size_t buffer_len;
@@ -155,17 +159,12 @@ NCCLHierarchicalAllreduce::NCCLHierarchicalAllreduce(NCCLContext* nccl_context, 
                                                      CUDAContext* cuda_context, HorovodGlobalState* global_state)
     : NCCLAllreduce(nccl_context, mpi_context,
                     cuda_context, global_state) {
-  auto horovod_q = std::getenv(HOROVOD_QUANTIZATION);
-  if (horovod_q != nullptr) {
-    long q = std::strtol(horovod_q, nullptr, 10);
-    if (q == 0)
-      quantizer = static_cast<MPI_Quantized_CUDAAllreduce *>(new SimpleQuantizer(mpi_context, cuda_context, global_state));
-    else
-      quantizer = new MPI_Quantized_CUDAAllreduce(mpi_context, cuda_context, global_state);
-
-    std::cout << "Quantization: " << q << std::endl;
-    }
-  }
+#if QUANTIZATION
+  inter_nodes_reducers.push_back(new MPI_CUDAAllBroadcastReducer(mpi_context, cuda_context, global_state));
+  inter_nodes_reducers.push_back(new MPI_CUDAScatterAllgatherReducer(mpi_context, cuda_context, global_state));
+  inter_nodes_reducers.push_back(new MPI_CUDARingReducer(mpi_context, cuda_context, global_state));
+#endif
+}
 
 Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Response& response) {
   auto& first_entry = entries[0];
@@ -295,7 +294,15 @@ Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries
   }
 
   if (global_state_->is_homogeneous || is_root_rank) {
-    if (quantizer == nullptr || !quantizer->Enabled(global_state_->param_manager, entries[0], response)) {
+    MPI_CUDACompressedReducer *internode_reducer =
+        nullptr;
+    for (auto reducer: inter_nodes_reducers) {
+      if (internode_reducer->Enabled(global_state_->param_manager, entries[0], response)) {
+        internode_reducer = reducer;
+        break;
+      }
+    }
+    if (internode_reducer == nullptr) {
       // cudaHostAlloc is significantly slower than malloc.  Pre-allocating
       // a buffer is not safe since the tensor can be arbitrarily large.
       host_buffer_ = malloc(total_buffer_len);
@@ -331,13 +338,13 @@ Status NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries
                                                 *stream_));
       timeline.ActivityEndAll(entries);
     } else {
-      Status status = quantizer->MPI_Quantized_Allreduce(MPI_IN_PLACE, buffer_data_at_rank_offset,
+      Status status = internode_reducer->Allreduce(MPI_IN_PLACE, buffer_data_at_rank_offset,
                                        (int) total_num_elements,
                                        mpi_context_->GetMPICommunicator(Communicator::CROSS),
                                        entries, (int) total_num_elements * sizeof(float));
       if (!status.ok()) {
         throw std::logic_error(
-            "Quantized Allreduce failed, see log for details.");
+            "Compressed Allreduce failed, see log for details.");
       }
     }
   }

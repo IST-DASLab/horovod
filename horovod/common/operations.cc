@@ -41,11 +41,12 @@
 
 #if HAVE_CUDA
 #include "ops/cuda_operations.h"
-#include "ops/mpi_cuda_operations.h"
-  #if QUANTIZATION
-#include "ops/mpi_quantized_cuda_operations.h"
-#include "ops/quantization.h"
-  #endif
+  #include "ops/mpi_cuda_operations.h"
+#if QUANTIZATION
+  #include "ops/reducers/all_broadcast.h"
+  #include "ops/reducers/ring.h"
+  #include "ops/reducers/scatter_allgather.h"
+#endif
 #endif
 
 #if HAVE_NCCL
@@ -136,19 +137,12 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 
 #if HAVE_CUDA
   #if QUANTIZATION
-  auto horovod_q = std::getenv(HOROVOD_QUANTIZATION);
   auto horovod_ha = std::getenv(HOROVOD_HIERARCHICAL_ALLREDUCE);
   if (horovod_ha == nullptr || std::strtol(horovod_ha, nullptr, 10) == 0) {
     std::cout << "Create non-hierarchical" << std::endl;
-    long q = (horovod_q == nullptr) ? 0:
-        std::strtol(horovod_q, nullptr, 10);
-      if (q == 0)
-        allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
-            new SimpleQuantizer(&mpi_context, &cuda_context, &state)));
-      else
-        allreduce_ops.push_back(
-            std::shared_ptr<AllreduceOp>(new MPI_Quantized_CUDAAllreduce(
-                &mpi_context, &cuda_context, &state)));
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_CUDAAllBroadcastReducer(&mpi_context, &cuda_context, &state)));
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_CUDAScatterAllgatherReducer(&mpi_context, &cuda_context, &state)));
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(new MPI_CUDARingReducer(&mpi_context, &cuda_context, &state)));
   }
   #endif
 #if HOROVOD_GPU_ALLREDUCE == 'M'

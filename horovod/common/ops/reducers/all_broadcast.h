@@ -13,38 +13,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 // =============================================================================
-#ifndef HOROVOD_QUANTIZATION_H
-#define HOROVOD_QUANTIZATION_H
+#ifndef HOROVOD_ALL_BROADCAST_H
+#define HOROVOD_ALL_BROADCAST_H
 
-
-#include "../common.h"
-#include "../global_state.h"
-#include "mpi_quantized_cuda_operations.h"
-#include "../compressor.h"
+#include "../../common.h"
+#include "../../compressor.h"
+#include "../../global_state.h"
+#include "compressed_reducer.h"
 
 namespace horovod {
 namespace common {
 
-struct SimpleQuantizer: public MPI_Quantized_CUDAAllreduce {
-  SimpleQuantizer(MPIContext* mpi_context, CUDAContext* cuda_context,
+struct MPI_CUDAAllBroadcastReducer: public MPI_CUDACompressedReducer {
+  MPI_CUDAAllBroadcastReducer(MPIContext* mpi_context, CUDAContext* cuda_context,
                   HorovodGlobalState* global_state);
-  // TODO: change int to Status.
-  Status MPI_Quantized_Allreduce(void* sendbuf, void* recvbuf, int count,
-                              MPI_Comm comm, std::vector<TensorTableEntry>& entries, int buffer_len) override;
+  Status AllreduceDivision(void* sendbuf, void* recvbuf, int num_elements,
+                   MPI_Comm comm, std::vector<TensorTableEntry>& entries,
+                   int buffer_len) override;
   bool Enabled(
       const ParameterManager& param_manager,
       const TensorTableEntry& entry,
-      const Response& response) const;
-  Status Execute(
-      std::vector<horovod::common::TensorTableEntry>& entries,
-      const horovod::common::Response& response);
-private:
-  Status Init(std::vector<TensorTableEntry>& entries, int num_elements, int world_size);
+      const Response& response) const override;
+  Status NonCompressedInit(std::vector<TensorTableEntry>& entries, int num_elements, int world_size);
+  Status NonCompressed_Allreduce(void* sendbuf, void* recvbuf, int num_elements,
+                          MPI_Comm comm, std::vector<TensorTableEntry>& entries, int buffer_len);
 
-  Compressor *compressor;
+protected:
+  virtual Status Init(const std::vector<TensorTableEntry>& entries, int world_size) override;
+
 };
 
 } // namespace common
 } // namespace horovod
 
-#endif //HOROVOD_QUANTIZATION_H
+#endif //HOROVOD_ALL_BROADCAST_H
