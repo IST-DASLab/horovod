@@ -2,7 +2,8 @@
 #define HOROVOD_COMPRESSED_REDUCER_H
 
 #include "../../common.h"
-#include "../../compressor.h"
+#include "../../compression/compressor.h"
+#include "../../compression/error_feedback.h"
 #include "../../mpi_context.h"
 #include "../collective_operations.h"
 #include "../mpi_cuda_operations.h"
@@ -29,9 +30,10 @@ public:
   Status Allreduce(void* sendbuf, void* recvbuf, int num_elements,
                    MPI_Comm comm, std::vector<TensorTableEntry>& entries,
                    int buffer_len);
-  virtual Status AllreduceDivision(void* sendbuf, void* recvbuf, int num_elements,
-                           MPI_Comm comm, std::vector<TensorTableEntry>& entries,
-                           int buffer_len) = 0;
+  virtual Status AllreduceDivision(void* sendbuf, void* recvbuf,
+                                   int num_elements, MPI_Comm comm,
+                                   std::vector<TensorTableEntry>& entries,
+                                   int64_t global_offset) = 0;
   virtual Status Init(const std::vector<TensorTableEntry>& entries, int world_size) = 0;
 
 protected:
@@ -39,6 +41,7 @@ protected:
   Compressor *compressor;
 
   FusionBufferManager bufferManager;
+  ErrorFeedback errorFeedbackManager;
   unsigned char* gradients_send;
   unsigned char* gradients_recv;
   unsigned char* decompress_buffer;

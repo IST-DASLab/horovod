@@ -4,7 +4,7 @@ namespace horovod {
 namespace common {
 MPI_CUDACompressedReducer::MPI_CUDACompressedReducer(MPIContext *mpi_context,
                                                      CUDAContext *cuda_context, HorovodGlobalState *global_state):
-    MPI_CUDAAllreduce(mpi_context, cuda_context, global_state){
+    MPI_CUDAAllreduce(mpi_context, cuda_context, global_state), errorFeedbackManager(global_state, cuda_context){
   const char *env_str = getenv(HOROVOD_REDUCTION);
   if (env_str == nullptr)
     reduction_type = ReductionType::Horovod;
@@ -25,7 +25,7 @@ MPI_CUDACompressedReducer::MPI_CUDACompressedReducer(MPIContext *mpi_context,
     }
   }
   if (global_state->quantization_bits == 32) {
-    compressor = new DummyCompressor();
+    compressor = new DummyCompressor(global_state);
   } else {
     env_str = getenv(HOROVOD_COMPRESSOR);
     if (env_str == nullptr)
@@ -67,20 +67,19 @@ Status MPI_CUDACompressedReducer::Allreduce(
     int num_divisions =
         (buffer_len + tensor_fusion_threshold - 1) / tensor_fusion_threshold;
     int num_elements_division = 0;
+    int64_t global_offset = 0;
     for (int division = 0; division < num_divisions; division++) {
       num_elements_division =
           (division == num_divisions - 1 &&
            buffer_len % tensor_fusion_threshold != 0)
           ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
           : tensor_fusion_threshold / sizeof(float);
-      buffer_len = num_elements_division * sizeof(float);
-      AllreduceDivision((void *)sendbuf_offset, (void *) recvbuf_offset,
-                        num_elements_division, comm, entries, buffer_len);
-      sendbuf_offset += (tensor_fusion_threshold / sizeof(float));
-      recvbuf_offset += (tensor_fusion_threshold / sizeof(float));
+      AllreduceDivision((void *)(sendbuf_offset + global_offset), (void *) (recvbuf_offset + global_offset),
+                        num_elements_division, comm, entries, global_offset);
+      global_offset += (tensor_fusion_threshold / sizeof(float));
     }
   } else {
-    AllreduceDivision(sendbuf, recvbuf, num_elements, comm, entries, buffer_len);
+    AllreduceDivision(sendbuf, recvbuf, num_elements, comm, entries, 0l);
   }
 }
 

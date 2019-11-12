@@ -82,7 +82,7 @@ Status MPI_CUDAScatterAllgatherReducer::Init(
       gradients_send + allocated_compression_buffer_size_send * (world_size - 1);
   decompress_buffer = gradients_recv +
       allocated_compression_buffer_size_recv * (world_size - 1);
-  status = compressor->Init(global_state_, entries);
+  status = compressor->Init(entries);
   if (!status.ok()) {
     for (auto& e : entries) {
       e.callback(status);
@@ -105,7 +105,7 @@ void printDebug1(float *buff, int n=8) {
 
 Status MPI_CUDAScatterAllgatherReducer::AllreduceDivision(
     void* input, void* output, int num_elements, MPI_Comm comm,
-    std::vector<TensorTableEntry>& entries, int buffer_len) {
+    std::vector<TensorTableEntry>& entries, int64_t glovbal_offset) {
   auto& first_entry = entries[0];
   int rank = global_state_->rank;
   int world_size = global_state_->size;

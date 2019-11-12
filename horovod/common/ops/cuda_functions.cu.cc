@@ -13,29 +13,37 @@ __device__ int toInt(unsigned char* z) {
 __global__ void _init_curand(unsigned int seed, CurandState* states) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   /* we have to initialize the state */
-//    curand_init(seed,  /* the seed can be the same for each core, here we pass
-//    the
-//                          time in from the CPU */
-//                index, /* the sequence number should be different for each
-//                core
-//                          (unless you want all cores to get the same sequence
-//                          of numbers for some reason - use thread id! */
-//                0, /* the offset is how much extra we advance in the sequence
-//                for
-//                      each call, can be 0 */
-//                &states[index]);
+    curand_init(seed,  /* the seed can be the same for each core, here we pass
+    the
+                          time in from the CPU */
+                index, /* the sequence number should be different for each
+                core
+                          (unless you want all cores to get the same sequence
+                          of numbers for some reason - use thread id! */
+                0, /* the offset is how much extra we advance in the sequence
+                for
+                      each call, can be 0 */
+                &states[index]);
 
-  unsigned char z[4];
-  for (int i = 0; i < 4; i++)
-    z[i] = 128 + index % 128;
-  states[index] = toInt(z);
+//  unsigned char z[4];
+//  for (int i = 0; i < 4; i++)
+//    z[i] = 128 + index % 128;
+//  states[index] = toInt(z);
 }
 
 __global__ void _add(int n, const float *x, float *y) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x * gridDim.x;
   for (int i = index; i < n; i += stride) {
-    y[i] = x[i] + y[i];
+    y[i] += x[i];
+  }
+}
+
+__global__ void _substract(int n, const float *x, float *y) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+  for (int i = index; i < n; i += stride) {
+    y[i] -= x[i];
   }
 }
 
@@ -166,8 +174,8 @@ __global__ void _quantize_value_bits(unsigned char *y, const float* x,
                    (divisor - 1);
       float d = (x[i * parts + j] - maxandmin[my_bucket * 2 + 1]) / unit
                 //               + (curand(&local_state) % 100001) / 100000.0;
-//                                 + curand_uniform(&local_state);
-                + HybridTaus(&local_state);
+                                 + curand_uniform(&local_state);
+//                + HybridTaus(&local_state);
       a += ((int)floor(d)) << (j * bits);
     }
     y[i] = (unsigned char) a;
@@ -250,8 +258,8 @@ __global__ void _quantize_Linf_normalized(unsigned char *y, const float* x,
     for (int j = 0; j < parts && i * parts + j < n; j++) {
       int my_bucket = (i * parts + j) / bucket_size;
       float rand =
-//          curand_uniform(&local_state);
-          HybridTaus(&local_state);
+          curand_uniform(&local_state);
+//          HybridTaus(&local_state);
 
       float d = x[i * parts + j] / norm[my_bucket];
       char sign = (d < -EPS);
@@ -292,7 +300,10 @@ __global__ void _dequantize_Linf_normalized(const unsigned char *y, const float 
         (y[i / parts] >> ((i % parts) * bits)) & (divisor - 1);
     char sign = (encoded_value & (1 << (bits - 1))) ? -1 : 1;
     encoded_value &= (1 << (bits - 1)) - 1;
-    x[i] = levels[encoded_value] * norms[my_bucket] * sign;
+    if (bits == 1)
+      x[i] = norms[my_bucket] * sign;
+    else
+      x[i] = levels[encoded_value] * norms[my_bucket] * sign;
   }
 }
 
@@ -312,8 +323,8 @@ __global__ void _quantize_L2_normalized(unsigned char *y, const float* x,
     for (int j = 0; j < parts && i * parts + j < n; j++) {
       int my_bucket = (i * parts + j) / bucket_size;
       float rand =
-//              curand_uniform(&local_state);
-              HybridTaus(&local_state);
+              curand_uniform(&local_state);
+//              HybridTaus(&local_state);
       float d = x[i * parts + j] / norm[my_bucket];
       char sign = (d < -EPS);
       d = fabsf(d);
@@ -376,6 +387,7 @@ void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
                       cudaStream_t stream) {
   _init_curand<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(
       seed, states);
+  cudaStreamSynchronize(stream);
 }
 
 int CUDA_get_curand_array_size(int num_elems) {
@@ -384,6 +396,11 @@ int CUDA_get_curand_array_size(int num_elems) {
 
 void CUDA_add(int n, const float* x, float* y, cudaStream_t stream) {
   _add<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(n, x, y);
+  cudaStreamSynchronize(stream);
+}
+
+void CUDA_substract(int n, const float* x, float* y, cudaStream_t stream) {
+  _substract<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(n, x, y);
   cudaStreamSynchronize(stream);
 }
 

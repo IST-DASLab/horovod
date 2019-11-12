@@ -558,7 +558,6 @@ def get_common_options(build_ext):
                'horovod/common/ops/collective_operations.cc',
                'horovod/common/ops/mpi_operations.cc',
                'horovod/common/utils.cc',
-               'horovod/common/compressor.cc',
                'horovod/common/ops/operation_manager.cc',
                'horovod/common/optim/bayesian_optimization.cc',
                'horovod/common/optim/gaussian_process.cc',
@@ -578,11 +577,14 @@ def get_common_options(build_ext):
 
         if quantization:
             MACROS += [('QUANTIZATION', '1')]
-            SOURCES += ['horovod/common/ops/cuda_functions.cu.cc']
-            SOURCES += ['horovod/common/ops/reducers/compressed_reducer.cc']
-            SOURCES += ['horovod/common/ops/reducers/all_broadcast.cc']
-            SOURCES += ['horovod/common/ops/reducers/scatter_allgather.cc']
-            SOURCES += ['horovod/common/ops/reducers/ring.cc']
+            SOURCES += ['horovod/common/ops/cuda_functions.cu.cc',
+            'horovod/common/ops/reducers/compressed_reducer.cc',
+            'horovod/common/ops/reducers/all_broadcast.cc',
+            'horovod/common/ops/reducers/scatter_allgather.cc',
+            'horovod/common/ops/reducers/ring.cc',
+            'horovod/common/compression/compressor.cc',
+            'horovod/common/compression/error_feedback.cc',
+            'horovod/common/compression/feedback_buffer_manager.cc']
 
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]

@@ -1,8 +1,6 @@
 #include "all_broadcast.h"
 #include "../cuda_functions.h"
 #include "../cuda_operations.h"
-#include <cuda.h>
-#include <cuda_runtime.h>
 
 #include "../../utils.h"
 #include "../../logging.h"
@@ -18,10 +16,19 @@ bool MPI_CUDAAllBroadcastReducer::Enabled(
     const ParameterManager& param_manager,
     const TensorTableEntry& entry,
     const Response& response) const {
-  if (entry.tensor->dtype() != HOROVOD_FLOAT32 || reduction_type != ReductionType::AllBroadcast) {
+  if (entry.tensor->dtype() != HOROVOD_FLOAT32 || reduction_type != ReductionType::AllBroadcast || entry.tensor_name.find("allreduce.bn1.bias") == std::string::npos) {
     return false;
   }
   return CUDAAllreduce::Enabled(param_manager, entry, response);
+}
+
+bool MPI_CUDAAllBroadcastReducer::Packed(
+    const horovod::common::ParameterManager& param_manager,
+    const horovod::common::TensorTableEntry& entry,
+    const horovod::common::Response& response,
+    const horovod::common::TensorTableEntry& new_entry,
+    const horovod::common::Response& new_response) const {
+  return false;
 }
 
 MPI_CUDAAllBroadcastReducer::MPI_CUDAAllBroadcastReducer(MPIContext* mpi_context, CUDAContext* cuda_context,
@@ -39,6 +46,7 @@ Status MPI_CUDAAllBroadcastReducer::Init(const std::vector<TensorTableEntry>& en
   int64_t allocated_compression_buffer_size_recv = allocated_compression_buffer_size_send;
   int64_t buffer_size = allocated_compression_buffer_size_send
       + allocated_compression_buffer_size_recv * (world_size - 1) + chunk_size;
+  // TODO: Add timeline callbacks
   const auto &status = bufferManager.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
       [&]() {},
@@ -153,12 +161,19 @@ Status MPI_CUDAAllBroadcastReducer::NonCompressed_Allreduce(void* sendbuf, void*
 
 Status MPI_CUDAAllBroadcastReducer::AllreduceDivision(
     void* sendbuf, void* recvbuf, int num_elements, MPI_Comm comm,
-    std::vector<TensorTableEntry>& entries, int buffer_len) {
+    std::vector<TensorTableEntry>& entries, int64_t global_offset) {
   auto& first_entry = entries[0];
   int rank, world_size;
   MPI_Comm_rank(comm, &rank);
   MPI_Comm_size(comm, &world_size);
-  Status status = compressor->Init(global_state_, entries);
+  Status status = compressor->Init(entries);
+  if (!status.ok()) {
+    for (auto& e : entries) {
+      e.callback(status);
+    }
+    return status;
+  }
+  status = errorFeedbackManager.Init(entries);
   if (!status.ok()) {
     for (auto& e : entries) {
       e.callback(status);
@@ -166,9 +181,15 @@ Status MPI_CUDAAllBroadcastReducer::AllreduceDivision(
     return status;
   }
 //  if (global_state_->rank == 0)
-//  printDebug((float*) recvbuf);
+//    printDebug((float*) recvbuf);
+
+  errorFeedbackManager.ApplyErrorFeedback(entries, sendbuf, num_elements, global_offset);
+//  if (global_state_->rank == 0)
+//    printDebug((float*) recvbuf);
   int64_t send_rcv_size = round_to(
       compressor->Compress((unsigned char *)sendbuf, (void **)&gradients_send, num_elements), ALIGNMENT_UNIT);
+  errorFeedbackManager.UpdateErrorFeedback(entries, sendbuf, gradients_send,
+      num_elements, 0, global_offset, compressor);
   std::vector<MPI_Request> requests;
   HERE
   int count = 0;
@@ -208,7 +229,6 @@ Status MPI_CUDAAllBroadcastReducer::AllreduceDivision(
     CUDA_add(num_elements, (float *) decompress_buffer, (float*) recvbuf,
              cuda_context_->streams[first_entry.device]);
   }
-  compressor->Correct(recvbuf, 0);
   global_state_->compression_time = compressor->compression_time;
   global_state_->meta_info_time = compressor->meta_info_time;
   HERE

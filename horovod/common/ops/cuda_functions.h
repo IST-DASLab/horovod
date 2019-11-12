@@ -5,13 +5,17 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
-//#define CurandState curandStatePhilox4_32_10_t
-#define CurandState int
+//#define CurandState curandState
+#define CurandState curandStatePhilox4_32_10_t
+//#define CurandState int
 
 void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
                       cudaStream_t stream);
 int CUDA_get_curand_array_size(int num_elems);
+// y += x.
 void CUDA_add(int n, const float* x, float* y, cudaStream_t stream);
+// y -= x
+void CUDA_substract(int n, const float* x, float* y, cudaStream_t stream);
 void CUDA_find_max_and_min_bucket(const float* x, float* maxandmin, int n,
                                   int bucket_size, cudaStream_t stream);
 void CUDA_find_Linf_bucket(const float* x, float* maxs, int n, int bucket_size,

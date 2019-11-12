@@ -15,8 +15,8 @@ public:
                const Response& response) const override;
 
   Status AllreduceDivision(void* sendbuf, void* recvbuf, int num_elements,
-                                   MPI_Comm comm, std::vector<TensorTableEntry>& entries,
-                                   int buffer_len) override;
+                           MPI_Comm comm, std::vector<TensorTableEntry>& entries,
+                           int64_t glovbal_offset) override;
 
 protected:
   Status Init(const std::vector<horovod::common::TensorTableEntry>& entries, int world_size) override;

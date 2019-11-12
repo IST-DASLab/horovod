@@ -34,7 +34,7 @@ public:
 
   virtual Status AllreduceDivision(void* sendbuf, void* recvbuf, int num_elements,
                            MPI_Comm comm, std::vector<TensorTableEntry>& entries,
-                           int buffer_len) override;
+                           int64_t glovbal_offset) override;
 
 protected:
   virtual Status Init(const std::vector<horovod::common::TensorTableEntry>& entries, int world_size);

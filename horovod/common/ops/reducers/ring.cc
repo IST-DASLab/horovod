@@ -63,7 +63,7 @@ Status MPI_CUDARingReducer::Init(
       gradients_send +
       allocated_compression_buffer_size_send * world_size;
   decompress_buffer =gradients_recv + allocated_compression_buffer_size_recv;
-  status = compressor->Init(global_state_, entries);
+  status = compressor->Init(entries);
   if (!status.ok()) {
     for (auto& e : entries) {
       e.callback(status);
@@ -86,7 +86,7 @@ void printDebug2(float *buff, int n=8) {
 
 Status MPI_CUDARingReducer::AllreduceDivision(
     void* sendbuf, void* recvbuf, int num_elements, MPI_Comm comm,
-    std::vector<horovod::common::TensorTableEntry>& entries, int buffer_len) {
+    std::vector<horovod::common::TensorTableEntry>& entries, int64_t glovbal_offset) {
   auto& first_entry = entries[0];
   int rank, world_size;
   MPI_Comm_rank(comm, &rank);

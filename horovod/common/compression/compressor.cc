@@ -1,13 +1,13 @@
 #include "compressor.h"
-#include "utils.h"
+#include "../logging.h"
+#include "../utils.h"
 #include <assert.h>
 #include <cstring>
-#include "logging.h"
 
 namespace horovod {
 namespace common {
 
-Compressor::Compressor(){
+Compressor::Compressor(HorovodGlobalState* global_state):global_state_(global_state){
   auto env_str = getenv(HOROVOD_COMPRESSION_BUCKET_SIZE);
   if (env_str == nullptr)
     bucket_size_ = COMPRESSION_BUCKET_SIZE;
@@ -30,16 +30,15 @@ void DummyCompressor::Decompress(unsigned char* input, void** output_p,
 
 CUDAQuantizer::CUDAQuantizer(
     CUDAContext* cuda_context,
-    HorovodGlobalState* global_state):CUDACompressor(cuda_context) {
-  bits_ = global_state->quantization_bits;
+    HorovodGlobalState* global_state):CUDACompressor(cuda_context, global_state) {
+  bits_ = global_state_->quantization_bits;
 }
 
-Status CUDAQuantizer::Init(HorovodGlobalState* global_state,
-                           const std::vector<TensorTableEntry>& entries) {
+Status CUDAQuantizer::Init(const std::vector<TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   device_ = first_entry.device;
 
-  int64_t chunk_size = global_state->param_manager.TensorFusionThresholdBytes();
+  int64_t chunk_size = global_state_->param_manager.TensorFusionThresholdBytes();
   int num_elems_in_chunk = ceil(((double)chunk_size) / sizeof(float));
   curand_array_size = CUDA_get_curand_array_size(num_elems_in_chunk);
   Status status =
@@ -162,9 +161,8 @@ int64_t CUDANormLinfQuantizer::BufferSize(int chunk_size) {
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-Status CUDANormLinfQuantizer::Init(HorovodGlobalState* globalState,
-                            const std::vector<TensorTableEntry>& entries) {
-  Status status = CUDAQuantizer::Init(globalState, entries);
+Status CUDANormLinfQuantizer::Init(const std::vector<TensorTableEntry>& entries) {
+  Status status = CUDAQuantizer::Init(entries);
   if (!status.ok()) {
     return status;
   }
@@ -187,7 +185,7 @@ Status CUDANormLinfQuantizer::Init(HorovodGlobalState* globalState,
         level_v *= multiplier_;
       }
     }
-    if (globalState->rank == 0) {
+    if (global_state_->rank == 0) {
       for (int i = 0; i < num_levels; i++) {
         std::cout << host_memory_levels[i] << " ";
       }
@@ -259,9 +257,8 @@ int64_t CUDANormL2Quantizer::BufferSize(int chunk_size) {
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-Status CUDANormL2Quantizer::Init(HorovodGlobalState* globalState,
-                                 const std::vector<TensorTableEntry>& entries) {
-  Status status = CUDAQuantizer::Init(globalState, entries);
+Status CUDANormL2Quantizer::Init(const std::vector<TensorTableEntry>& entries) {
+  Status status = CUDAQuantizer::Init(entries);
   if (!status.ok()) {
     return status;
   }
