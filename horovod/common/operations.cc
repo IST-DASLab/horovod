@@ -54,6 +54,9 @@
 #include "ops/gpu_operations.h"
 #if HAVE_MPI
 #include "ops/mpi_gpu_operations.h"
+#if GRAD_COMPRESSION
+#include "ops/compressed/mpi_gpu_compressed_operations.h"
+#endif
 #endif
 #endif
 
@@ -150,6 +153,10 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 
 #if HAVE_MPI && HAVE_GPU
   if (mpi_context.IsEnabled()) {
+#if GRAD_COMPRESSION
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+        new MPI_GPUCompressedAllReduce(&mpi_context, &gpu_context, &state)));
+#endif
 #if HOROVOD_GPU_ALLREDUCE == 'M'
     allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
         new MPI_GPUAllreduce(&mpi_context, &gpu_context, &state)));
@@ -773,20 +780,23 @@ bool horovod_ccl_built() {
 #endif
 }
 
-int horovod_reduce_op_average() {
-  return ReduceOp::AVERAGE;
+int horovod_reduce_op_average() { return ReduceOp::AVERAGE; }
+
+int horovod_reduce_op_sum() { return ReduceOp::SUM; }
+
+int horovod_reduce_op_adasum() { return ReduceOp::ADASUM; }
+
+double horovod_allreduce_time() { return horovod_global.allreduce_time; }
+
+double horovod_compression_time() { return horovod_global.compression_time; }
+
+double horovod_communication_time() {
+  return horovod_global.communication_time;
 }
 
-int horovod_reduce_op_sum() {
-  return ReduceOp::SUM;
-}
-
-int horovod_reduce_op_adasum() {
-  return ReduceOp::ADASUM;
-}
+double horovod_meta_info_time() { return horovod_global.meta_info_time; }
 
 }
-
 // Contexts and controller must be initialized and the background thread
 // must be running before this function is called.
 Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,

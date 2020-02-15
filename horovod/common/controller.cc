@@ -50,7 +50,9 @@ Controller::Controller(ResponseCache& response_cache, TensorQueue& tensor_queue,
                        Timeline& timeline, ParameterManager& parameter_manager)
     : stall_inspector_(response_cache), tensor_queue_(tensor_queue),
       timeline_(timeline), response_cache_(response_cache),
-      parameter_manager_(parameter_manager) {}
+      parameter_manager_(parameter_manager),
+      grad_compression_rate(GetIntEnvOrDefault(HOROVOD_QUANTIZATION_BITS, 32)/32.0) {
+}
 
 ResponseList Controller::ComputeResponseList(std::atomic_bool& shut_down,
                                              HorovodGlobalState& state) {
@@ -629,6 +631,7 @@ void Controller::CoordinateCacheAndState(CacheCoordinator& cache_coordinator) {
 
 ResponseList Controller::FuseResponses(std::deque<Response>& responses) {
   ResponseList response_list;
+  auto compression_rate = GradCompressionRate();
   while (!responses.empty()) {
 
     auto response = responses.front();
@@ -649,7 +652,8 @@ ResponseList Controller::FuseResponses(std::deque<Response>& responses) {
         int64_t new_tensor_size = new_response.tensor_sizes().empty()
                                       ? 0
                                       : new_response.tensor_sizes()[0] *
-                                        GetTypeSize(new_response.tensor_type());
+                                        GetTypeSize(new_response.tensor_type()) *
+                                        compression_rate;
         if (response.response_type() == new_response.response_type() &&
             response.devices() == new_response.devices() &&
             response.tensor_type() == new_response.tensor_type() &&

@@ -54,17 +54,18 @@ Status GPUOpContext::FinalizeGPUQueue(const std::vector<TensorTableEntry>& entri
   auto& evt_queue = event_queue;
   auto& timeline = global_state_->timeline;
   auto& gpu_context = gpu_context_;
-
+  auto& global_state = global_state_;
   // Claim a std::shared_ptr to the fusion buffer to prevent its memory from being reclaimed
   // during finalization.
   auto fusion_buffer = global_state_->fusion_buffer.GetBuffer(
       first_entry.device, first_entry.context->framework(), global_state_->current_nccl_stream);
 
   gpu_context_->finalizer_thread_pool.execute([entries, first_entry, cpu_buffer, fusion_buffer, free_host_buffer,
-                                                evt_queue, &timeline, &gpu_context]() mutable {
+                                                evt_queue, &timeline, &gpu_context, &global_state]() mutable {
     gpu_context->SetDevice(first_entry.device);
 
     gpu_context->WaitForEvents(evt_queue, entries, timeline);
+    global_state->allreduce_time += time_since(global_state->start_nccl_allreduce);
     if (free_host_buffer && cpu_buffer != nullptr) {
       free(cpu_buffer);
     }

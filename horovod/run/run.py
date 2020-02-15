@@ -604,6 +604,24 @@ def parse_args():
                                   help='Run Horovod using the MPI controller. This will '
                                        'be the default if Horovod was built with MPI support.')
 
+    group_grad_compression = parser.add_argument_group('compression arguments')
+    group_grad_compression.add_argument('--reduction-type', type=config_parser.ReductionType.from_string,
+                                        choices=list(config_parser.ReductionType),
+                                        action=make_override_action(override_args),
+                                        help='Allreduce algorithm to use in case of compressed communication.')
+    group_grad_compression.add_argument('--compression-type', type=config_parser.CompressionType.from_string,
+                                        action=make_override_action(override_args),
+                                        choices=list(config_parser.CompressionType),
+                                        help='Compression algorithm to use in case of compressed communication ')
+    group_grad_compression.add_argument('--compression-bucket-size', type=int, default=512,
+                                        action=make_override_action(override_args),
+                                        help='Bucket size of gradient to compress')
+    group_grad_compression.add_argument('-q', '--quantization-bits', type=int, default=None,
+                                        action=make_override_action(override_args),
+                                        help='Number of bits quantize to (0-8). 0 means no compression')
+    group_grad_compression.add_argument('--compression-error-feedback', action=make_override_true_action(override_args),
+                                        help='Enable error feedback for gradient compression.')
+
     args = parser.parse_args()
 
     if args.config_file:
@@ -674,6 +692,13 @@ class HorovodArgs(object):
         # controller arguments
         self.use_gloo = None
         self.use_mpi = None
+
+        # compression arguments
+        self.quantization_bits = None
+        self.bucket_size = 512
+        self.reduction_type = 'none'
+        self.compression_type = 'none'
+        self.compression_error_feedback = False
 
 
 def parse_host_files(filename):

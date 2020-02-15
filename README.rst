@@ -362,6 +362,31 @@ See `Troubleshooting <docs/troubleshooting.rst>`_ and submit a `ticket <https://
 if you can't find an answer.
 
 
+QHorovod
+-------------------------------------------
+QHorovod is Horovod with ability to compress gradients with non-distributive compress functions.
+Currently implemented several quantization functions.
+
+Compile QHorovod with (simply add `HOROVOD_GRAD_COMPRESSION=1` to original compilation):
+.. code-block:: bash
+
+     $ HOROVOD_GRAD_COMPRESSION=1 HOROVOD_GPU_ALLREDUCE=NCCL HOROVOD_WITH_PYTORCH=1 HOROVOD_WITHOUT_TENSORFLOW=1 HOROVOD_WITHOUT_MXNET=1 python setup.py install
+
+Usage of QHorovod in python code doesn't differ from original variant.
+
+To run horovod with quantized gradient you have to set several parameters to horovodrun:
+
+1. `--reduction-type`. The possible options are `Ring, Allbroadcast, ScatterAllgather, none`.
+These are different reduction algorithms we implemented in order to use gradients quantization in allreduce phase.
+`none` means that horovod allreduce algorithms will be used.
+2. `--compression-type`. The possible options are `maxmin, expL2, uni, expLinf, none`.
+These stand for MaxMin, exponential with L2, Linf norms, uniform with Linf norm quantizations.
+None means no compression will be applied, it is used for debugging.
+3.  `--quantization-bits` number of quantization bits use to compress to.
+Also used for "fake" compression in case of horovod NCCL algorithms.
+4. '--compression-bucket-size' size of bucket of the gradient used in any compression technique.
+5. `--compression-error-feedback` Enable error correction. This feature must refactored.
+
 Citation
 --------
 Please cite Horovod in your publications if it helps your research:

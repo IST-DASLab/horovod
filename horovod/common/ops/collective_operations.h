@@ -36,7 +36,7 @@ public:
                          const Response& response) = 0;
 
 protected:
-  int64_t NumElements(std::vector<TensorTableEntry>& entries);
+  int64_t NumElements(const std::vector<TensorTableEntry>& entries) const;
 
   HorovodGlobalState* global_state_;
 };

@@ -56,6 +56,41 @@ ccl_root = os.environ.get('CCL_ROOT')
 have_ccl = ccl_root is not None
 
 
+def customize_compiler_for_nvcc(self):
+    """inject deep into distutils to customize how the dispatch
+    to gcc/nvcc works.
+    If you subclass UnixCCompiler, it's not trivial to get your subclass
+    injected in, and still have the right customizations (i.e.
+    distutils.sysconfig.customize_compiler) run on it. So instead of going
+    the OO route, I have this. Note, it's kindof like a wierd functional
+    subclassing going on."""
+
+    # tell the compiler it can processes .cu
+    self.src_extensions.append('.cu')
+
+    # save references to the default compiler_so and _comple methods
+    default_compiler_so = self.compiler_so
+    super = self._compile
+
+    def _compile(obj, src, ext, cc_args, extra_postargs, pp_opts):
+        if '.cu.cc' in os.path.split(src)[1]:
+            # use the cuda for .cu files
+            self.set_executable('compiler_so', ['nvcc'])
+            # use only a subset of the extra_postargs, which are 1-1 translated
+            # from the extra_compile_args in the Extension class
+            postargs = ['-c', '-std=c++11', '-x=cu', '-arch=sm_37',
+                        '--ptxas-options=-v', '--compiler-options','-fPIC'] + extra_postargs[16:20]
+        else:
+            postargs = extra_postargs
+        print('POSTARGS', postargs)
+        super(obj, src, ext, cc_args, postargs, pp_opts)
+        # reset the default compiler_so, which we might have changed for cuda
+        self.compiler_so = default_compiler_so
+
+    # inject our redefined _compile method into the class
+    self._compile = _compile
+
+
 def is_build_action():
     if len(sys.argv) <= 1:
         return False
@@ -649,6 +684,8 @@ def get_common_options(build_ext):
         raise DistutilsError('HOROVOD_GPU_BROADCAST=%s is invalid, supported '
                              'values are "", "MPI", "NCCL".' % gpu_broadcast)
 
+    grad_compression = os.environ.get('HOROVOD_GRAD_COMPRESSION')
+    grad_compression = grad_compression and int(grad_compression) == 1
     have_cuda = False
     have_rocm = False
     gpu_include_dirs = gpu_lib_dirs = gpu_macros = []
@@ -783,6 +820,18 @@ def get_common_options(build_ext):
     if have_cuda:
         set_cuda_options(build_ext, COMPILE_FLAGS, MACROS, INCLUDES, SOURCES, have_mpi, LIBRARY_DIRS, LIBRARIES)
         INCLUDES += ['horovod/common/ops/cuda']
+        if have_mpi and grad_compression:
+            MACROS += [('GRAD_COMPRESSION', '1')]
+            SOURCES += ['horovod/common/ops/compressed/compression/cuda/cuda_functions.cu.cc',
+                        'horovod/common/ops/compressed/mpi_gpu_compressed_operations.cc',
+                        'horovod/common/ops/compressed/reducers/all_broadcast.cc',
+                        'horovod/common/ops/compressed/reducers/scatter_allgather.cc',
+                        'horovod/common/ops/compressed/reducers/ring.cc',
+                        'horovod/common/ops/compressed/utils.cc',
+                        'horovod/common/ops/compressed/compression/compressor.cc',
+                        'horovod/common/ops/compressed/compression/error_feedback.cc',
+                        'horovod/common/ops/compressed/compression/feedback_buffer_manager.cc']
+
 
     if have_rocm:
         MACROS += [('HAVE_ROCM', '1'), ('HAVE_GPU', '1')] + gpu_macros
@@ -995,10 +1044,12 @@ def build_tf_extension(build_ext, global_options):
             if options['BUILD_GLOO']:
                 build_cmake(build_ext, gloo_lib, 'tf', gloo_compile_macros, options, tensorflow_mpi_lib)
             customize_compiler(build_ext.compiler)
-            build_ext.build_extension(tensorflow_mpi_lib)
+            customize_compiler_for_nvcc(build_ext.compiler)
+        build_ext.build_extension(tensorflow_mpi_lib)
     finally:
         # Revert to the default compiler settings
         customize_compiler(build_ext.compiler)
+        customize_compiler_for_nvcc(build_ext.compiler)
 
 
 def parse_version(version_str):
@@ -1116,6 +1167,7 @@ def build_mx_extension(build_ext, global_options):
     mxnet_mpi_lib.library_dirs = options['LIBRARY_DIRS']
     mxnet_mpi_lib.libraries = options['LIBRARIES']
 
+    customize_compiler_for_nvcc(build_ext.compiler)
     build_ext.build_extension(mxnet_mpi_lib)
 
 
@@ -1281,6 +1333,7 @@ def build_torch_extension(build_ext, global_options, torch_version):
         # ffi_ext is distutils Extension, not setuptools Extension
         for k, v in ffi_ext.__dict__.items():
             setuptools_ext.__dict__[k] = v
+        customize_compiler_for_nvcc(build_ext.compiler)
         build_ext.build_extension(setuptools_ext)
 
 
@@ -1384,10 +1437,12 @@ def build_torch_extension_v2(build_ext, global_options, torch_version):
             if options['BUILD_GLOO']:
                 build_cmake(build_ext, gloo_lib, 'torchv2', gloo_abi_flag, options, torch_mpi_lib_v2)
             customize_compiler(build_ext.compiler)
+            customize_compiler_for_nvcc(build_ext.compiler)
             build_ext.build_extension(torch_mpi_lib_v2)
     finally:
         # Revert to the default compiler settings
         customize_compiler(build_ext.compiler)
+        customize_compiler_for_nvcc(build_ext.compiler)
 
 
 def get_cmake_bin():

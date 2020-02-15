@@ -209,3 +209,36 @@ class HorovodBasics(object):
           A boolean value indicating whether oneCCL support was compiled.
         """
         return bool(self.MPI_LIB_CTYPES.horovod_ccl_built())
+
+    def allreduce_time(self):
+        """Returns Time used by horovod(NCCL or custom reducers) for allreduce.
+
+        Returns:
+          A float value.
+        """
+        return float(self.MPI_LIB_CTYPES.horovod_allreduce_time())
+
+    def communication_time(self):
+        """Returns Time used by horovod(custom reducers) for communication.
+
+        Returns:
+          A float value.
+        """
+        return float(self.MPI_LIB_CTYPES.horovod_communication_time())
+
+    def compression_time(self):
+        """Returns Time used by horovod(comprossors in custom reducers) for compression/decompression.
+
+        Returns:
+          A float value.
+        """
+        return float(self.MPI_LIB_CTYPES.horovod_compression_time())
+
+    def meta_info_time(self):
+        """Returns Time used by horovod(comprossors in custom reducers) for meta information in compression.
+
+        Returns:
+          A float value.
+        """
+        return float(self.MPI_LIB_CTYPES.horovod_meta_info_time())
+

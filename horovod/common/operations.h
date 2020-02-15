@@ -102,6 +102,18 @@ int horovod_reduce_op_sum();
 // C interface to return value of the ReduceOp::ADASUM enum field.
 int horovod_reduce_op_adasum();
 
+// C interface to return value of the allreduce time.
+double horovod_allreduce_time();
+
+// C interface to return value of the gradient compress/decompress time.
+double horovod_compression_time();
+
+// C interface to return value of the communication time(Makes sense only with custom reducers).
+double horovod_communication_time();
+
+// C interface to return value of the meta info calculation time.
+double horovod_meta_info_time();
+
 }
 
 Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,

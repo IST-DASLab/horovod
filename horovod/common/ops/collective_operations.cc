@@ -22,7 +22,7 @@ namespace common {
 HorovodOp::HorovodOp(HorovodGlobalState* global_state)
     : global_state_(global_state) {}
 
-int64_t HorovodOp::NumElements(std::vector<TensorTableEntry>& entries) {
+int64_t HorovodOp::NumElements(const std::vector<TensorTableEntry>& entries) const {
   int64_t num_elements = 0;
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();

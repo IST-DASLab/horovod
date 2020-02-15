@@ -27,6 +27,8 @@
 #include "timeline.h"
 #include "utils/env_parser.h"
 
+#include "ops/compressed/utils.h"
+
 namespace horovod {
 namespace common {
 
@@ -109,6 +111,12 @@ struct HorovodGlobalState {
   // Chunk size for MPI send/recv in Adasum allreduce. Some versions of Intel MPI
   // benefit from a smaller chunk size.
   int64_t adasum_mpi_chunk_size = 1<<30;
+
+  double allreduce_time = 0;
+  double communication_time = 0;
+  double meta_info_time = 0;
+  double compression_time = 0;
+  std::chrono::time_point<clock_> start_nccl_allreduce;
 
   ~HorovodGlobalState() {
     // Make sure that the destructor of the background thread is safe to
