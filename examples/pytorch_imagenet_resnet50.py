@@ -12,6 +12,7 @@ import os
 import math
 from tqdm import tqdm
 from distutils.version import LooseVersion
+import time
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Example',
@@ -49,6 +50,8 @@ parser.add_argument('--momentum', type=float, default=0.9,
 parser.add_argument('--wd', type=float, default=0.00005,
                     help='weight decay')
 
+parser.add_argument('--benchmark-mode', action='store_true', default=False,
+                    help='turns on benchmark mode')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
 parser.add_argument('--seed', type=int, default=42,
@@ -285,8 +288,11 @@ class Metric(object):
     def avg(self):
         return self.sum / self.n
 
-
+start = time.time()
 for epoch in range(resume_from_epoch, args.epochs):
     train(epoch)
     validate(epoch)
     save_checkpoint(epoch)
+if args.benchmark_mode:
+    print("Total time elapsed {:.2f}, allreduce time: {:2f}, compression time: {.2f}",
+          time.time() - start, hvd.allreduce_time(), hvd.compression_time())
