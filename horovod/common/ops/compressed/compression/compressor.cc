@@ -1,5 +1,4 @@
 #include "compressor.h"
-#include <assert.h>
 #include <cstring>
 
 #include "../../../logging.h"

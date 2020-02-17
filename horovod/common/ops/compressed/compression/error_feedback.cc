@@ -1,7 +1,6 @@
 #include "error_feedback.h"
 #include "../../../utils/env_parser.h"
 #include "cuda/cuda_functions.h"
-#include <cassert>
 
 namespace horovod {
 namespace common {

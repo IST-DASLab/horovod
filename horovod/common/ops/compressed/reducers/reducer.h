@@ -4,6 +4,7 @@
 #include "../../../mpi/mpi_context.h"
 #include "../../gpu_operations.h"
 #include "../compression/compressor.h"
+#include "../compression/vector_operations.h"
 #include "../compression/error_feedback.h"
 
 namespace horovod {
@@ -13,9 +14,9 @@ class MPIReducer {
 public:
   MPIReducer(MPIContext* mpi_context, GPUContext* gpu_context,
              HorovodGlobalState* global_state, Compressor* compressor)
-      : gpu_context_(gpu_context), gpu_op_context_(gpu_context, global_state),
+      : gpu_context_(gpu_context),
         global_state_(global_state), mpi_context_(mpi_context),
-        compressor_(compressor),
+        compressor_(compressor), summator_(global_state, gpu_context),
         errorFeedbackManager_(global_state, gpu_context) {
     tensor_fusion_threshold_ =
         global_state->parameter_manager.TensorFusionThresholdBytes();
@@ -32,12 +33,12 @@ public:
 
 protected:
   GPUContext* gpu_context_;
-  GPUOpContext gpu_op_context_;
 
   HorovodGlobalState* global_state_;
   MPIContext* mpi_context_;
 
   Compressor* compressor_;
+  Summator summator_;
   ErrorFeedback errorFeedbackManager_;
 
   // We only need some framework agnostic Buffer Manager so we reuse

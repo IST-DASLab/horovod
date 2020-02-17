@@ -132,10 +132,8 @@ Status MPI_GPUAllreduce_ScatterReduceAllgather::AllreduceDivision(
   for (int i = 0; i < world_size - 1; i++) {
     compressor_->Decompress(recv_buf, decompress_buffer_, entries, start_elem,
                             global_offset, recv_num_elems);
-    CUDA_add(
-        recv_num_elems, (float*)decompress_buffer_, (float*)output + start_elem,
-        gpu_context_
-            ->streams[global_state_->current_nccl_stream][entries[0].device]);
+    summator_.Add((float*)decompress_buffer_, (float*)output + start_elem,
+                  recv_num_elems, entries[0].device);
     recv_buf += recv_compressed_size;
   }
   send_buf = gradients_send_;

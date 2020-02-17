@@ -830,6 +830,7 @@ def get_common_options(build_ext):
                         'horovod/common/ops/compressed/utils.cc',
                         'horovod/common/ops/compressed/compression/compressor.cc',
                         'horovod/common/ops/compressed/compression/error_feedback.cc',
+                        'horovod/common/ops/compressed/compression/vector_operations.cc',
                         'horovod/common/ops/compressed/compression/feedback_buffer_manager.cc']
 
 

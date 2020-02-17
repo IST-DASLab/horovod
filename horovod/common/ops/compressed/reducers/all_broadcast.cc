@@ -112,9 +112,8 @@ Status MPI_GPUAllreduce_AllBroadcast::AllreduceDivision(
                             decompress_buffer_, entries, 0, global_offset,
                             num_elements);
     //  add decompressed value to the right place of data_buffer
-    CUDA_add(num_elements, (float*)decompress_buffer_, (float*)recvbuf,
-             gpu_context_->streams[global_state_->current_nccl_stream]
-                                  [entries[0].device]);
+    summator_.Add((float*)decompress_buffer_, (float*)recvbuf, num_elements,
+        entries[0].device);
   }
   global_state_->compression_time = compressor_->getCompressionTime();
   global_state_->meta_info_time = compressor_->getMetaInfoTime();

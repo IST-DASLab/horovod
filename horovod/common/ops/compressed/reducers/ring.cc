@@ -121,10 +121,8 @@ Status MPI_GPUAllreduce_Ring::AllreduceDivision(
     compressor_->Decompress(gradients_recv_, decompress_buffer_, entries,
                             buf_recv_idx, global_offset,
                             segment_size(recv_segment_idx));
-    CUDA_add(segment_size(recv_segment_idx), (float*)decompress_buffer_,
-             segment_update,
-             gpu_context_->streams[global_state_->current_nccl_stream]
-                                  [entries[0].device]);
+    summator_.Add((float*)decompress_buffer_, segment_update,
+                  segment_size(recv_segment_idx), entries[0].device);
   }
   send_segment_idx = (rank + world_size + 1) % world_size;
   buf_send_idx =
