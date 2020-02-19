@@ -6,8 +6,9 @@ namespace common {
 
 MPI_GPUAllreduce_AllBroadcast::MPI_GPUAllreduce_AllBroadcast(
     MPIContext* mpi_context, GPUContext* gpu_context,
-    HorovodGlobalState* global_state, Compressor* compressor)
-    : MPIReducer(mpi_context, gpu_context, global_state, compressor) {
+    HorovodGlobalState* global_state, Compressor* compressor,
+    Summator* summator)
+    : MPIReducer(mpi_context, gpu_context, global_state, compressor, summator) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "AllBroadcast";
   }
@@ -58,11 +59,10 @@ Status MPI_GPUAllreduce_AllBroadcast::Init(
 }
 
 Status MPI_GPUAllreduce_AllBroadcast::AllreduceDivision(
-    void* sendbuf, void* recvbuf, int num_elements, MPI_Comm comm,
-    std::vector<TensorTableEntry>& entries, int64_t global_offset) {
+    int num_elements, MPI_Comm comm, std::vector<TensorTableEntry>& entries,
+    int64_t global_offset) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
-
   Status status = compressor_->Init(entries);
   if (!status.ok()) {
     for (auto& e : entries) {
@@ -78,15 +78,9 @@ Status MPI_GPUAllreduce_AllBroadcast::AllreduceDivision(
     return status;
   }
 
-  errorFeedbackManager_.ApplyErrorFeedback(entries, sendbuf, num_elements,
-                                           global_offset);
-  int64_t send_rcv_size =
-      compressor_->Compress((unsigned char*)sendbuf, gradients_send_, entries,
-                            0, global_offset, num_elements);
+  int64_t send_rcv_size = compressor_->Compress(gradients_send_, entries, 0,
+                                                global_offset, num_elements);
 
-  errorFeedbackManager_.UpdateErrorFeedback(entries, sendbuf, gradients_send_,
-                                            num_elements, 0, global_offset,
-                                            compressor_);
   std::vector<MPI_Request> requests;
   int count = 0;
   auto start = clock_::now();
@@ -104,16 +98,15 @@ Status MPI_GPUAllreduce_AllBroadcast::AllreduceDivision(
   }
   MPI_Waitall((int)requests.size(), &requests[0], MPI_STATUSES_IGNORE);
   global_state_->communication_time += time_since(start);
-  compressor_->Decompress(gradients_send_, (unsigned char*)recvbuf, entries, 0,
-                          global_offset, num_elements);
+  compressor_->Decompress(gradients_send_, entries, 0, global_offset,
+                          num_elements);
 
   for (int i = 0; i < world_size - 1; i++) {
     compressor_->Decompress(gradients_recv_ + i * send_rcv_size,
                             decompress_buffer_, entries, 0, global_offset,
                             num_elements);
-    //  add decompressed value to the right place of data_buffer
-    summator_.Add((float*)decompress_buffer_, (float*)recvbuf, num_elements,
-        entries[0].device);
+    summator_->Add((float*)decompress_buffer_, entries, 0, global_offset,
+                  num_elements, true);
   }
   global_state_->compression_time = compressor_->getCompressionTime();
   global_state_->meta_info_time = compressor_->getMetaInfoTime();

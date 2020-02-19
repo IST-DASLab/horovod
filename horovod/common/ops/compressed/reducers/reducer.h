@@ -13,10 +13,11 @@ namespace common {
 class MPIReducer {
 public:
   MPIReducer(MPIContext* mpi_context, GPUContext* gpu_context,
-             HorovodGlobalState* global_state, Compressor* compressor)
+             HorovodGlobalState* global_state, Compressor* compressor,
+             Summator* summator)
       : gpu_context_(gpu_context),
         global_state_(global_state), mpi_context_(mpi_context),
-        compressor_(compressor), summator_(global_state, gpu_context),
+        compressor_(compressor), summator_(summator),
         errorFeedbackManager_(global_state, gpu_context) {
     tensor_fusion_threshold_ =
         global_state->parameter_manager.TensorFusionThresholdBytes();
@@ -26,8 +27,7 @@ public:
 
   virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
 
-  virtual Status AllreduceDivision(void* sendbuf, void* recvbuf,
-                                   int num_elements, MPI_Comm comm,
+  virtual Status AllreduceDivision(int num_elements, MPI_Comm comm,
                                    std::vector<TensorTableEntry>& entries,
                                    int64_t global_offset) = 0;
 
@@ -38,7 +38,7 @@ protected:
   MPIContext* mpi_context_;
 
   Compressor* compressor_;
-  Summator summator_;
+  Summator* summator_;
   ErrorFeedback errorFeedbackManager_;
 
   // We only need some framework agnostic Buffer Manager so we reuse

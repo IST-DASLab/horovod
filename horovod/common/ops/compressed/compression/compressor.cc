@@ -148,7 +148,119 @@ void Compressor::Decompress(
     offset_cumm += entry.tensor->shape().num_elements();
   }
 }
+
+int64_t Compressor::Compress(
+    unsigned char* output,
+    const std::vector<horovod::common::TensorTableEntry>& entries,
+    int64_t fusion_offset, int64_t global_offset, int64_t chunk_num_elems,
+    bool original) {
+  auto get_tensor_data =
+      [original](const horovod::common::TensorTableEntry& entry) {
+        if (original)
+          return (unsigned char*)entry.tensor->data();
+        else
+          return (unsigned char*)entry.output->data();
+      };
+
+  if (entries.size() == 1) {
+    // there is no need in bucket preparation
+    // Call ordinary Compression
+    return Compress(get_tensor_data(entries[0]) +
+                        fusion_offset * sizeof(float) +
+                        global_offset * sizeof(float),
+                    output, chunk_num_elems);
+  }
+  int64_t offset_cumm = 0;
+  int64_t nelem = 0;
+  int64_t buffer_offset = 0;
+  int64_t total_compressed_size = 0;
+  int compressed_size;
+  for (auto& entry : entries) {
+    nelem = entry.tensor->shape().num_elements();
+    if (offset_cumm + nelem <= fusion_offset) {
+      offset_cumm += nelem;
+      continue;
+    }
+
+    if (offset_cumm - fusion_offset >= chunk_num_elems) {
+      break;
+    }
+    buffer_offset = 0;
+    if (offset_cumm < fusion_offset) {
+      // If the first part of param group is placed in previous slice
+      // depending on reduction algorithm.
+      nelem = offset_cumm + nelem - fusion_offset;
+      buffer_offset = entry.tensor->shape().num_elements() - nelem;
+    }
+
+    if (std::max(offset_cumm, fusion_offset) + nelem >
+        fusion_offset + chunk_num_elems) {
+      // if layer doesn't fit the rest of slice.
+      nelem = fusion_offset + chunk_num_elems -
+              std::max(offset_cumm, fusion_offset);
+    }
+
+    auto tensor_data = get_tensor_data(entry) + buffer_offset * sizeof(float);
+    compressed_size =
+        round_to(Compress(tensor_data, output, nelem), ALIGNMENT_UNIT);
+    offset_cumm += entry.tensor->shape().num_elements();
+    output += compressed_size;
+    total_compressed_size += compressed_size;
+  }
+  return total_compressed_size;
+}
+
+void Compressor::Decompress(
+    unsigned char* input_data,
+    const std::vector<horovod::common::TensorTableEntry>& entries,
+    int64_t fusion_offset, int64_t global_offset, int64_t chunk_num_elems) {
+  if (entries.size() == 1) {
+    // there is no need in bucket preparation
+    // Call ordinary Compression
+    Decompress(input_data,
+               ((unsigned char*)entries[0].output->data()) +
+                   fusion_offset * sizeof(float) +
+                   global_offset * sizeof(float),
+               chunk_num_elems);
+    return;
+  }
+
+  int64_t offset_cumm = 0;
+  int64_t nelem = 0;
+  int64_t buffer_offset = 0;
+  int64_t cumm_decompressed = 0;
+  for (auto& entry : entries) {
+    nelem = entry.tensor->shape().num_elements();
+    if (offset_cumm + nelem <= fusion_offset) {
+      offset_cumm += nelem;
+      continue;
+    }
+    if (offset_cumm - fusion_offset >= chunk_num_elems)
+      break;
+    buffer_offset = 0;
+    if (offset_cumm < fusion_offset) {
+      // If the first part of param group is placed in previous slice
+      // depending on reduction algorithm.
+      nelem = offset_cumm + nelem - fusion_offset;
+      buffer_offset = entry.tensor->shape().num_elements() - nelem;
+    }
+
+    if (std::max(offset_cumm, fusion_offset) + nelem >
+        fusion_offset + chunk_num_elems) {
+      // if layer doesn't fit the rest of slice.
+      nelem = fusion_offset + chunk_num_elems -
+              std::max(offset_cumm, fusion_offset);
+    }
+    auto output =
+        ((unsigned char*)entry.output->data()) + buffer_offset * sizeof(float);
+    Decompress(input_data + cumm_decompressed, output, nelem);
+    cumm_decompressed += BufferSize(nelem);
+    offset_cumm += entry.tensor->shape().num_elements();
+  }
+}
+
 double Compressor::getMetaInfoTime() const { return meta_info_time_; }
+
 double Compressor::getCompressionTime() const { return compression_time_; }
 
 // ================
@@ -186,16 +298,16 @@ GPUDummyCompressor::GPUDummyCompressor(GPUContext* gpu_context,
 int64_t GPUDummyCompressor::Compress(unsigned char* input_data,
                                      unsigned char* output, int64_t num_elems) {
   int64_t processed_size = num_elems * sizeof(float);
-  cudaMemcpyAsync((void*)output, (void*)input_data, processed_size,
-                  cudaMemcpyDeviceToDevice);
+  cudaMemcpy((void*)output, (void*)input_data, processed_size,
+             cudaMemcpyDeviceToDevice);
   return processed_size;
 }
 
 void GPUDummyCompressor::Decompress(unsigned char* input_data,
                                     unsigned char* output, int64_t num_elems) {
   int64_t processed_size = num_elems * sizeof(float);
-  cudaMemcpyAsync((void*)output, (void*)input_data, processed_size,
-                  cudaMemcpyDeviceToDevice);
+  cudaMemcpy((void*)output, (void*)input_data, processed_size,
+             cudaMemcpyDeviceToDevice);
 }
 
 // ================
