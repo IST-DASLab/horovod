@@ -18,22 +18,34 @@ public:
   virtual int64_t BufferSize(int num_elems,
                              const std::vector<TensorTableEntry>& entries,
                              int64_t fusion_offset, int64_t global_offset);
-  // Returns size of meaningful data inside data (in bytes).
+  // Returns size of compressed size (in bytes).
   virtual int64_t Compress(unsigned char* input_data, unsigned char* output,
                            int64_t num_elems) = 0;
   virtual void Decompress(unsigned char* input, unsigned char* output,
                           int64_t num_elems) = 0;
-
-  virtual int64_t Compress(unsigned char* input_data, unsigned char* output,
-                           const std::vector<TensorTableEntry>& entries,
-                           int64_t fusion_offset, int64_t global_offset,
-                           int64_t chunk_num_elems);
-
-  virtual void Decompress(unsigned char* input_data, unsigned char* output,
-                          const std::vector<TensorTableEntry>& entries,
-                          int64_t fusion_offset, int64_t global_offset,
-                          int64_t chunk_num_elems);
-
+  // Compresses input_data into output per entry. Returns size of compressed
+  // data.
+  int64_t Compress(unsigned char* input_data, unsigned char* output,
+                   const std::vector<TensorTableEntry>& entries,
+                   int64_t fusion_offset, int64_t global_offset,
+                   int64_t chunk_num_elems);
+  // Decompresses input_data into output.
+  void Decompress(unsigned char* input_data, unsigned char* output,
+                  const std::vector<TensorTableEntry>& entries,
+                  int64_t fusion_offset, int64_t global_offset,
+                  int64_t chunk_num_elems);
+  // Compresses entries data into output. Returns size of compressed data.
+  // @original parameter stands for where take the values from entry: original tensor
+  // or output.
+  int64_t Compress(unsigned char* output,
+                   const std::vector<TensorTableEntry>& entries,
+                   int64_t fusion_offset, int64_t global_offset,
+                   int64_t chunk_num_elems, bool original=true);
+  // Decompresses input_data into entries.
+  void Decompress(unsigned char* input_data,
+                  const std::vector<TensorTableEntry>& entries,
+                  int64_t fusion_offset, int64_t global_offset,
+                  int64_t chunk_num_elems);
   virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
   double getMetaInfoTime() const;
   double getCompressionTime() const;
@@ -94,7 +106,8 @@ class GPUQuantizer : public GPUCompressor, public Quantizer {
 public:
   GPUQuantizer(GPUContext* gpu_context, HorovodGlobalState* global_state,
                int quantization_bits)
-      : GPUCompressor(gpu_context), Quantizer(global_state, quantization_bits) {}
+      : GPUCompressor(gpu_context), Quantizer(global_state, quantization_bits) {
+  }
 
   Status Init(const std::vector<TensorTableEntry>& entries) override;
 

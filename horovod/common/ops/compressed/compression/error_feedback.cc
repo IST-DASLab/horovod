@@ -57,7 +57,7 @@ void ErrorFeedback::ApplyErrorFeedback(
     float* error_fb_buf =
         (float*)const_cast<void*>(buffer->AccessData(entry.context)) +
         global_offset;
-    CUDA_add(num_elements, error_fb_buf, values_buffer,
+    CUDA_add(num_elements, error_fb_buf, values_buffer, values_buffer,
              gpu_context_
                  ->streams[global_state_->current_nccl_stream][entry.device]);
   } else {
@@ -71,6 +71,7 @@ void ErrorFeedback::ApplyErrorFeedback(
       float* error_fb_buf =
           (float*)const_cast<void*>(buffer->AccessData(entry.context));
       CUDA_add(n_elems, error_fb_buf, values_buffer + offset_cumm,
+               values_buffer + offset_cumm,
                gpu_context_
                    ->streams[global_state_->current_nccl_stream][entry.device]);
       offset_cumm += n_elems;
@@ -91,10 +92,10 @@ void ErrorFeedback::UpdateErrorFeedback(
       gpu_context_
           ->streams[global_state_->current_nccl_stream][entries[0].device];
   float* decompressed_buffer = decompressed_buf;
-  compressor->Decompress(compressed_buffer, (unsigned char*) decompressed_buffer,
+  compressor->Decompress(compressed_buffer, (unsigned char*)decompressed_buffer,
                          chunk_num_elements);
-  //  compressor_->Decompress(compressed_buffer, (unsigned char*)decompressed_buffer,
-  //  entries,
+  //  compressor_->Decompress(compressed_buffer, (unsigned
+  //  char*)decompressed_buffer, entries,
   //      fusion_offset, global_offset, chunk_num_elements);
 
   if (entries.size() == 1) {

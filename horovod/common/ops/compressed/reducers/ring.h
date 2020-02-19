@@ -9,9 +9,9 @@ class MPI_GPUAllreduce_Ring : public MPIReducer {
 public:
   MPI_GPUAllreduce_Ring(MPIContext* mpi_context, GPUContext* gpu_context,
                         HorovodGlobalState* global_state,
-                        Compressor* compressor);
+                        Compressor* compressor, Summator* summator);
 
-  Status AllreduceDivision(void* sendbuf, void* recvbuf, int num_elements,
+  Status AllreduceDivision(int num_elements,
                            MPI_Comm comm,
                            std::vector<TensorTableEntry>& entries,
                            int64_t glovbal_offset) override;

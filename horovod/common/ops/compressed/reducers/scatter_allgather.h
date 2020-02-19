@@ -27,12 +27,14 @@ public:
   MPI_GPUAllreduce_ScatterReduceAllgather(MPIContext* mpi_context,
                                           GPUContext* gpu_context,
                                           HorovodGlobalState* global_state,
-                                          Compressor* compressor);
+                                          Compressor* compressor,
+                                          Summator* summator);
 
-  virtual Status AllreduceDivision(void* sendbuf, void* recvbuf, int num_elements,
-                           MPI_Comm comm, std::vector<TensorTableEntry>& entries,
-                           int64_t global_offset) override;
-  virtual Status Init(const std::vector<TensorTableEntry>& entries) override;
+  Status AllreduceDivision(int num_elements, MPI_Comm comm,
+                                   std::vector<TensorTableEntry>& entries,
+                                   int64_t global_offset) override;
+
+  Status Init(const std::vector<TensorTableEntry>& entries) override;
 };
 
 } // namespace common

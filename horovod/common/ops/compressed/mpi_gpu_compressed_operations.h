@@ -21,9 +21,12 @@ public:
   virtual ~MPI_GPUCompressedAllReduce()=default;
   Status Execute(std::vector<TensorTableEntry>& entries,
       const Response& response) override;
-  Status Allreduce(void* sendbuf, void* recvbuf, int num_elements,
+  Status Allreduce(int num_elements,
                    MPI_Comm comm, std::vector<TensorTableEntry>& entries,
                    int buffer_len);
+//  Status Allreduce(void* sendbuf, void* recvbuf, int num_elements,
+//                   MPI_Comm comm, std::vector<TensorTableEntry>& entries,
+//                   int buffer_len);
   bool Enabled(const ParameterManager& param_manager,
                              const std::vector<TensorTableEntry>& entries,
                              const Response& response) const override;

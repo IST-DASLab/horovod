@@ -10,12 +10,12 @@ struct MPI_GPUAllreduce_AllBroadcast : public MPIReducer {
   MPI_GPUAllreduce_AllBroadcast(MPIContext* mpi_context,
                                 GPUContext* gpu_context,
                                 HorovodGlobalState* global_state,
-                                Compressor* compressor);
-  Status AllreduceDivision(void* sendbuf, void* recvbuf, int num_elements,
+                                Compressor* compressor, Summator* summator);
+  Status AllreduceDivision(int num_elements,
                            MPI_Comm comm,
                            std::vector<TensorTableEntry>& entries,
                            int64_t global_offset) override;
-  virtual Status Init(const std::vector<TensorTableEntry>& entries) override;
+  Status Init(const std::vector<TensorTableEntry>& entries) override;
 };
 
 } // namespace common

@@ -15,7 +15,7 @@ void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
                       cudaStream_t stream);
 int CUDA_get_curand_array_size(int num_elems);
 // y += x.
-void CUDA_add(int n, const float* x, float* y, cudaStream_t stream);
+void CUDA_add(int n, const float* x, float* y, float* sum, cudaStream_t stream);
 // z = y - x
 void CUDA_diff(int n, const float* x, const float* y, float* z, cudaStream_t stream);
 void CUDA_find_max_and_min_bucket(const float* x, float* maxandmin, int n,

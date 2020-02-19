@@ -43,11 +43,11 @@ __global__ void _init_curand(unsigned int seed, CurandState* states) {
   states[index] = toInt(z);
 }
 
-__global__ void _add(int n, const float *x, float *y) {
+__global__ void _add(int n, const float *x, const float* y, float* sum) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x * gridDim.x;
   for (int i = index; i < n; i += stride) {
-    y[i] = x[i] + y[i];
+    sum[i] = x[i] + y[i];
   }
 }
 
@@ -428,11 +428,10 @@ int CUDA_get_curand_array_size(int num_elems) {
   return BLOCKS_PER_GRID(num_elems) * MAX_THREADS_PER_BLOCK * sizeof(CurandState);
 }
 
-void CUDA_add(int n, const float* x, float* y, cudaStream_t stream) {
-//  _add<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK>>>(n, x, y);
+void CUDA_add(int n, const float* x, float* y, float* sum, cudaStream_t stream) {
   int blocks = 512;
   int num_threads = MAX_THREADS_PER_BLOCK;
-  _add<<<blocks, num_threads, 0, stream>>>(n, x, y);
+  _add<<<blocks, num_threads, 0, stream>>>(n, x, y, sum);
   CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
