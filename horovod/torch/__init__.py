@@ -63,7 +63,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                  backward_passes_per_step=1, op=Average):
         super(self.__class__, self).__init__(params)
         self._compression = compression
-
+        self._step = 0
         if named_parameters is not None:
             named_parameters = list(named_parameters)
         else:
@@ -132,7 +132,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
 
     def _allreduce_grad_async(self, p):
         name = self._parameter_names.get(p)
-        tensor_compressed, ctx = self._compression.compress(p)
+        tensor_compressed, ctx = self._compression.compress(p, self._step)
 
         handle = allreduce_async_(tensor_compressed, name=name, op=self.op)
         return handle, ctx
@@ -205,6 +205,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                               "optimizer.synchronize() in your code.")
             self.synchronize()
         self._synchronized = False
+        self._step += 1
         return super(self.__class__, self).step(closure)
 
     def zero_grad(self):
@@ -219,7 +220,7 @@ class _DistributedAdasumOptimizer(torch.optim.Optimizer):
     def __init__(self, params, named_parameters, compression,
                  backward_passes_per_step=1):
         super(self.__class__, self).__init__(params)
-
+        self._step = 0
         self._compression = compression
 
         if named_parameters is not None:
@@ -264,7 +265,7 @@ class _DistributedAdasumOptimizer(torch.optim.Optimizer):
             p : torch.zeros_like(p, requires_grad=False)
             for _, p in named_parameters
         }
-
+        self._step = 0
         self._register_hooks()
 
     def set_backward_passes_per_step(self, passes):
@@ -319,7 +320,7 @@ class _DistributedAdasumOptimizer(torch.optim.Optimizer):
         p.data.sub_(start)
         
         # allreduce as before
-        tensor_compressed, ctx = self._compression.compress(p)
+        tensor_compressed, ctx = self._compression.compress(p, self._step)
         handle = allreduce_async_(tensor_compressed.data, name=name, op=Adasum)
 
         # reset stashed parameters
