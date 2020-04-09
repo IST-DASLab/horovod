@@ -96,7 +96,29 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                              'parameters were not named. Python object ids: '
                              '%s' % ', '.join(str(id) for id in unnamed_param_ids))
 
-        self._parameter_names = {v: k for k, v in sorted(named_parameters)}
+        if len(named_parameters) > 0:
+            if isinstance(named_parameters[0][1], torch.Tensor):
+                if any([not isinstance(p, torch.Tensor) for name, p in named_parameters]):
+                    raise ValueError('named_parameters should consistently be a sequence of '
+                                     'tuples (name, torch.Tensor)')
+                self._is_tensor_instance = True
+                # there is an issue when using torch.Tensor as key, so use its hash instead
+                # https://github.com/pytorch/pytorch/issues/7733
+                self._parameter_names = {v.__hash__(): k for k, v
+                                         in sorted(named_parameters)}
+                self._tensor_list = [tensor for name, tensor in named_parameters]
+            else:
+                self._is_tensor_instance = False
+                self._parameter_names = {v: k for k, v
+                                         in sorted(named_parameters)}
+        else:
+            self._is_tensor_instance = False
+            self._parameter_names = {v: 'push_pull.noname.%s' % i
+                             for param_group in self.param_groups
+                             for i, v in enumerate(param_group['params'])}
+
+
+
         self.backward_passes_per_step = backward_passes_per_step
         self._allreduce_delay = {v: self.backward_passes_per_step
                                  for _, v in sorted(named_parameters)}

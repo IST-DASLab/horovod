@@ -8,7 +8,10 @@ import torch.utils.data.distributed
 from torchvision import models
 import horovod.torch as hvd
 import timeit
+import logging
 import numpy as np
+from horovod.torch.cross_barrier import CrossBarrier
+from horovod.torch.broken_barrier import BrokenBarrier
 
 # Benchmark settings
 parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
@@ -33,6 +36,15 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
 
 parser.add_argument('--use-adasum', action='store_true', default=False,
                     help='use adasum algorithm to do reduction')
+
+optimizers = ["default", "cross", "broken"]
+parser.add_argument('--optimizer', type=str, default='default', choices=optimizers,
+                    help='optimizers')
+parser.add_argument('--num-parallel-steps', type=int, default=10,
+                    help='number of sgd steps done in parallel')
+parser.add_argument('--bb-l2-ratio', type=float, default=0.5,
+                    help='Ratio of l2 norm to collect to break the barrier')
+
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -62,12 +74,29 @@ optimizer = optim.SGD(model.parameters(), lr=0.01 * lr_scaler)
 
 # Horovod: (optional) compression algorithm.
 compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+if args.optimizer == "default":
+    # Horovod: wrap optimizer with DistributedOptimizer.
+    optimizer = hvd.DistributedOptimizer(optimizer,
+                                         named_parameters=model.named_parameters(),
+                                         compression=compression,
+                                         op=hvd.Adasum if args.use_adasum else hvd.Average)
+    logger = logging.getLogger("default")
+elif args.optimizer == "broken":
+    optimizer = BrokenBarrier(model,
+                              optimizer,
+                              named_parameters=model.named_parameters(),
+                              compression=compression,
+                              num_steps=args.num_warmup_batches + args.num_iters * args.num_batches_per_iter,
+                              num_parallel_steps=args.num_parallel_steps, l2_barrier_cond_ratio=args.bb_l2_ratio)
+    logger = logging.getLogger("BrokenBarrier")
+elif args.optimizer == "cross":
+    logger = logging.getLogger("CrossBarrier")
+    optimizer = CrossBarrier(model,
+                             optimizer,
+                             named_parameters=model.named_parameters(),
+                             compression=compression,
+                             num_steps=args.num_warmup_batches + args.num_iters * args.num_batches_per_iter)
 
-# Horovod: wrap optimizer with DistributedOptimizer.
-optimizer = hvd.DistributedOptimizer(optimizer,
-                                     named_parameters=model.named_parameters(),
-                                     compression=compression,
-                                     op=hvd.Adasum if args.use_adasum else hvd.Average)
 
 # Horovod: broadcast parameters & optimizer state.
 hvd.broadcast_parameters(model.state_dict(), root_rank=0)
