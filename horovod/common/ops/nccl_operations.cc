@@ -136,6 +136,10 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
     num_elements += e.tensor->shape().num_elements();
   }
 
+  auto compress_ratio = GetDoubleEnvOrDefault("HOROVOD_COMPRESS_RATIO", 1.0);
+
+  num_elements = (int64_t)(compress_ratio * num_elements);
+
   // Do allreduce.
   auto nccl_result = ncclAllReduce(fused_input_data, buffer_data,
                                    (size_t) num_elements,
