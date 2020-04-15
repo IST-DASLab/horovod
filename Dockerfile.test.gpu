@@ -7,7 +7,7 @@ ARG CUDA_DOCKER_VERSION=10.0-devel-ubuntu16.04
 ARG CUDNN_VERSION=7.6.0.64-1+cuda10.0
 ARG NCCL_VERSION_OVERRIDE=2.4.7-1+cuda10.0
 ARG MPI_KIND=OpenMPI
-ARG PYTHON_VERSION=2.7
+ARG PYTHON_VERSION=3.5
 ARG TENSORFLOW_PACKAGE=tensorflow-gpu==1.14.0
 ARG KERAS_PACKAGE=keras==2.2.4
 ARG PYTORCH_PACKAGE=torch==1.2.0
@@ -93,6 +93,7 @@ RUN if [[ ${PYTORCH_PACKAGE} == "torch-nightly" ]]; then \
     fi
 # Pin Pillow<7.0: https://github.com/pytorch/vision/issues/1718
 RUN pip install "Pillow<7.0" --no-deps
+RUN pip install tqdm
 
 # Install MXNet.
 RUN pip install ${MXNET_PACKAGE}
