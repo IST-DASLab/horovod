@@ -4,19 +4,16 @@
 namespace horovod {
 namespace common {
 
-MPI_GPUAllreduce_ScatterReduceAllgather::
-    MPI_GPUAllreduce_ScatterReduceAllgather(MPIContext* mpi_context,
-                                            GPUContext* gpu_context,
-                                            HorovodGlobalState* global_state,
-                                            Compressor* compressor,
-                                            Summator* summator)
-    : MPIReducer(mpi_context, gpu_context, global_state, compressor, summator) {
+MPI_Allreduce_ScatterReduceAllgather::MPI_Allreduce_ScatterReduceAllgather(
+    MPIContext* mpi_context, HorovodGlobalState* global_state,
+    Compressor* compressor, Summator* summator)
+    : MPIReducer(mpi_context, global_state, compressor, summator) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "ScatterAllgather";
   }
 }
 
-Status MPI_GPUAllreduce_ScatterReduceAllgather::Init(
+Status MPI_Allreduce_ScatterReduceAllgather::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
@@ -63,7 +60,7 @@ Status MPI_GPUAllreduce_ScatterReduceAllgather::Init(
     }
     return status;
   }
-  status = errorFeedbackManager_.Init(entries);
+  status = error_feedback_.Init(entries);
   if (!status.ok()) {
     for (auto& e : entries) {
       e.callback(status);
@@ -74,7 +71,7 @@ Status MPI_GPUAllreduce_ScatterReduceAllgather::Init(
   return Status::OK();
 }
 
-Status MPI_GPUAllreduce_ScatterReduceAllgather::AllreduceDivision(
+Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     int num_elements, MPI_Comm comm, std::vector<TensorTableEntry>& entries,
     int64_t global_offset) {
 
@@ -91,7 +88,7 @@ Status MPI_GPUAllreduce_ScatterReduceAllgather::AllreduceDivision(
   int send_num_elems = 0;
   int send_compressed_size = 0;
 
-  //  errorFeedbackManager_.ApplyErrorFeedback(entries, input, num_elements,
+  //  error_feedback_.Apply(entries, input, num_elements,
   //                                           global_offset);
   unsigned char* send_buf = gradients_send_;
   unsigned char* recv_buf = gradients_recv_;
@@ -109,16 +106,11 @@ Status MPI_GPUAllreduce_ScatterReduceAllgather::AllreduceDivision(
         (num_elems_per_node * node_rank) + std::min(residue, node_rank);
     send_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
 
-    send_compressed_size =
-        round_to(compressor_->Compress(send_buf, entries, start_offset,
-                                       global_offset, send_num_elems),
-                 ALIGNMENT_UNIT);
+    send_compressed_size = round_to(
+        compressor_->Compress(send_buf, entries, error_feedback_, start_offset,
+                              global_offset, send_num_elems),
+        ALIGNMENT_UNIT);
 
-    //    errorFeedbackManager_.UpdateErrorFeedback(entries, input_buf,
-    //    send_buf,
-    //                                              send_num_elems,
-    //                                              start_offset, global_offset,
-    //                                              compressor_);
     requests.push_back(MPI_Request());
     MPI_Isend(send_buf, send_compressed_size, MPI_UNSIGNED_CHAR, node_rank, 0,
               comm, &requests.back());
@@ -133,15 +125,15 @@ Status MPI_GPUAllreduce_ScatterReduceAllgather::AllreduceDivision(
   recv_buf = gradients_recv_;
   for (int i = 0; i < world_size - 1; i++) {
     compressor_->Decompress(recv_buf, decompress_buffer_, entries, start_elem,
-                            global_offset, recv_num_elems);
+                            recv_num_elems);
     summator_->Add((float*)decompress_buffer_, entries, start_elem,
-                  global_offset, recv_num_elems, i != 0);
+                   global_offset, recv_num_elems, i != 0);
     recv_buf += recv_compressed_size;
   }
 
   // Quantize the sum into gradients_recv_[0] and maxandmin_recv[0]
-  compressor_->Compress(gradients_send_, entries, start_elem, global_offset,
-                        recv_num_elems, false);
+  compressor_->Compress(gradients_send_, entries, error_feedback_, start_elem,
+                        global_offset, recv_num_elems, false);
   compressor_->Decompress(gradients_send_, entries, start_elem, global_offset,
                           recv_num_elems);
 
@@ -194,9 +186,8 @@ Status MPI_GPUAllreduce_ScatterReduceAllgather::AllreduceDivision(
                             global_offset, recv_num_elems);
     recv_buf += recv_compressed_size;
   }
-  if (rank == 0)
-    PrintDebug((float*)entries[0].output->data(), 8);
-
+  global_state_->compression_time = compressor_->getCompressionTime();
+  global_state_->meta_info_time = compressor_->getMetaInfoTime();
   return Status::OK();
 }
 

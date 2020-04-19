@@ -1,7 +1,9 @@
 #include "mpi_gpu_compressed_operations.h"
+#include "mpi_compressed_operations.h"
 #include "reducers/all_broadcast.h"
 #include "reducers/ring.h"
 #include "reducers/scatter_allgather.h"
+#include "compression/gpu_compressor.h"
 #include "utils.h"
 
 namespace horovod {
@@ -45,21 +47,25 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
   auto summator = new GPUSummator(global_state, gpu_context);
   switch (reduction_type) {
   case ReductionType::AllBroadcast:
-    mpiReducer = new MPI_GPUAllreduce_AllBroadcast(mpi_context, gpu_context,
+    mpiReducer = new MPI_Allreduce_AllBroadcast(mpi_context,
                                                    global_state, compressor, summator);
     break;
   case ReductionType::Ring:
-    mpiReducer = new MPI_GPUAllreduce_Ring(mpi_context, gpu_context,
+    mpiReducer = new MPI_Allreduce_Ring(mpi_context,
                                            global_state, compressor, summator);
     break;
   case ReductionType::ScatterAllgather:
-    mpiReducer = new MPI_GPUAllreduce_ScatterReduceAllgather(
-        mpi_context, gpu_context, global_state, compressor, summator);
+    mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
+        mpi_context, global_state, compressor, summator);
     break;
   case ReductionType::NoneReduction:
     mpiReducer = nullptr;
     break;
   }
+}
+
+MPI_GPUCompressedAllReduce::~MPI_GPUCompressedAllReduce() {
+  delete mpiReducer;
 }
 
 Status MPI_GPUCompressedAllReduce::Allreduce(
@@ -69,6 +75,7 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
   if (!status.ok()) {
     return status;
   }
+  mpiReducer->ApplyErrorFeedback(entries);
   int64_t tensor_fusion_threshold =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
   if (buffer_len > tensor_fusion_threshold) {
@@ -101,7 +108,6 @@ MPI_GPUCompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
   auto start = clock_::now();
   Allreduce(num_elements, MPI_COMM_WORLD, entries, buffer_len);
   global_state_->allreduce_time += time_since(start);
-
   return Status::OK();
 }
 
@@ -111,7 +117,8 @@ bool MPI_GPUCompressedAllReduce::Enabled(
     const horovod::common::Response& response) const {
   if (mpiReducer == nullptr ||
       NumElements(entries) * sizeof(float) < BUFFER_THRESHOLD ||
-      entries[0].tensor->dtype() != HOROVOD_FLOAT32) {
+      entries[0].tensor->dtype() != HOROVOD_FLOAT32 ||
+      entries[0].device == CPU_DEVICE_ID) {
     return false;
   }
   return GPUAllreduce::Enabled(param_manager, entries, response);

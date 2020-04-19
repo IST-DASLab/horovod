@@ -25,7 +25,10 @@ class HorovodBasics(object):
     def __init__(self, pkg_path, *args):
         full_path = util.get_extension_full_path(pkg_path, *args)
         self.MPI_LIB_CTYPES = ctypes.CDLL(full_path, mode=ctypes.RTLD_GLOBAL)
-
+        self.MPI_LIB_CTYPES.horovod_allreduce_time.restype = ctypes.c_double
+        self.MPI_LIB_CTYPES.horovod_communication_time.restype = ctypes.c_double
+        self.MPI_LIB_CTYPES.horovod_compression_time.restype = ctypes.c_double
+        self.MPI_LIB_CTYPES.horovod_meta_info_time.restype = ctypes.c_double
         self.Average = self.MPI_LIB_CTYPES.horovod_reduce_op_average()
         self.Sum = self.MPI_LIB_CTYPES.horovod_reduce_op_sum()
         self.Adasum = self.MPI_LIB_CTYPES.horovod_reduce_op_adasum()
@@ -216,7 +219,7 @@ class HorovodBasics(object):
         Returns:
           A float value.
         """
-        return float(self.MPI_LIB_CTYPES.horovod_allreduce_time())
+        return self.MPI_LIB_CTYPES.horovod_allreduce_time()
 
     def communication_time(self):
         """Returns Time used by horovod(custom reducers) for communication.
@@ -224,7 +227,7 @@ class HorovodBasics(object):
         Returns:
           A float value.
         """
-        return float(self.MPI_LIB_CTYPES.horovod_communication_time())
+        return self.MPI_LIB_CTYPES.horovod_communication_time()
 
     def compression_time(self):
         """Returns Time used by horovod(comprossors in custom reducers) for compression/decompression.
@@ -232,7 +235,7 @@ class HorovodBasics(object):
         Returns:
           A float value.
         """
-        return float(self.MPI_LIB_CTYPES.horovod_compression_time())
+        return self.MPI_LIB_CTYPES.horovod_compression_time()
 
     def meta_info_time(self):
         """Returns Time used by horovod(comprossors in custom reducers) for meta information in compression.
@@ -240,5 +243,5 @@ class HorovodBasics(object):
         Returns:
           A float value.
         """
-        return float(self.MPI_LIB_CTYPES.horovod_meta_info_time())
+        return self.MPI_LIB_CTYPES.horovod_meta_info_time()
 

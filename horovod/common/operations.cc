@@ -48,6 +48,9 @@
 #include "mpi/mpi_controller.h"
 #include "ops/mpi_operations.h"
 #include "ops/adasum_mpi_operations.h"
+#if GRAD_COMPRESSION
+#include "ops/compressed/mpi_compressed_operations.h"
+#endif
 #endif
 
 #if HAVE_GPU
@@ -218,6 +221,10 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   if (mpi_context.IsEnabled()){
     adasum_ops.push_back(
         std::shared_ptr<AllreduceOp>(new AdasumMPIAllreduceOp(&mpi_context, &state)));
+#if GRAD_COMPRESSION
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+        new MPI_CompressedAllReduce(&mpi_context, &state)));
+#endif
     allreduce_ops.push_back(
         std::shared_ptr<AllreduceOp>(new MPIAllreduce(&mpi_context,&state)));
     allgather_ops.push_back(
@@ -786,7 +793,8 @@ int horovod_reduce_op_sum() { return ReduceOp::SUM; }
 
 int horovod_reduce_op_adasum() { return ReduceOp::ADASUM; }
 
-double horovod_allreduce_time() { return horovod_global.allreduce_time; }
+double horovod_allreduce_time() {
+  return horovod_global.allreduce_time; }
 
 double horovod_compression_time() { return horovod_global.compression_time; }
 

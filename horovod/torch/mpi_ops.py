@@ -58,6 +58,10 @@ gloo_built = _basics.gloo_built
 nccl_built = _basics.nccl_built
 ddl_built = _basics.ddl_built
 ccl_built = _basics.ccl_built
+allreduce_time = _basics.allreduce_time
+communication_time = _basics.communication_time
+compression_time = _basics.compression_time
+meta_info_time = _basics.meta_info_time
 
 # import reduction op values
 Average = _basics.Average

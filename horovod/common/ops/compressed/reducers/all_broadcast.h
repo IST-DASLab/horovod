@@ -6,13 +6,11 @@
 namespace horovod {
 namespace common {
 
-struct MPI_GPUAllreduce_AllBroadcast : public MPIReducer {
-  MPI_GPUAllreduce_AllBroadcast(MPIContext* mpi_context,
-                                GPUContext* gpu_context,
-                                HorovodGlobalState* global_state,
-                                Compressor* compressor, Summator* summator);
-  Status AllreduceDivision(int num_elements,
-                           MPI_Comm comm,
+struct MPI_Allreduce_AllBroadcast : public MPIReducer {
+  MPI_Allreduce_AllBroadcast(MPIContext* mpi_context,
+                             HorovodGlobalState* global_state,
+                             Compressor* compressor, Summator* summator);
+  Status AllreduceDivision(int num_elements, MPI_Comm comm,
                            std::vector<TensorTableEntry>& entries,
                            int64_t global_offset) override;
   Status Init(const std::vector<TensorTableEntry>& entries) override;

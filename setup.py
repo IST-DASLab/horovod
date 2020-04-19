@@ -79,7 +79,7 @@ def customize_compiler_for_nvcc(self):
             # use only a subset of the extra_postargs, which are 1-1 translated
             # from the extra_compile_args in the Extension class
             postargs = ['-c', '-std=c++11', '-x=cu', '-arch=sm_37',
-                        '--ptxas-options=-v', '--compiler-options','-fPIC'] + extra_postargs[16:20]
+                        '--ptxas-options=-v', '--compiler-options','-fPIC'] + extra_postargs[17:20]
         else:
             postargs = extra_postargs
         print('POSTARGS', postargs)
@@ -152,7 +152,7 @@ def get_supported_instruction_set_flags(flags_to_check):
 
 def get_cpp_flags(build_ext):
     last_err = None
-    default_flags = ['-std=c++11', '-fPIC', '-O2', '-Wall', '-fassociative-math', '-ffast-math', '-ftree-vectorize', '-funsafe-math-optimizations']
+    default_flags = ['-std=c++11', '-fPIC', '-O2', '-Wall', '-fassociative-math', '-ffast-math', '-ftree-vectorize', '-funsafe-math-optimizations', '-fopenmp']
     avx_fma_flags = get_supported_instruction_set_flags(['-mf16c', '-mavx', '-mfma'])
     if sys.platform == 'darwin':
         # Darwin most likely will have Clang, which has libc++.
@@ -798,6 +798,21 @@ def get_common_options(build_ext):
                     'horovod/common/ops/mpi_operations.cc',
                     'horovod/common/ops/adasum/adasum_mpi.cc',
                     'horovod/common/ops/adasum_mpi_operations.cc']
+        if grad_compression:
+            MACROS += [('GRAD_COMPRESSION', '1')]
+            SOURCES += ['horovod/common/ops/compressed/compression/cuda/cuda_functions.cu.cc',
+                        'horovod/common/ops/compressed/mpi_gpu_compressed_operations.cc',
+                        'horovod/common/ops/compressed/mpi_compressed_operations.cc',
+                        'horovod/common/ops/compressed/reducers/all_broadcast.cc',
+                        'horovod/common/ops/compressed/reducers/scatter_allgather.cc',
+                        'horovod/common/ops/compressed/reducers/ring.cc',
+                        'horovod/common/ops/compressed/utils.cc',
+                        'horovod/common/ops/compressed/compression/compressor.cc',
+                        'horovod/common/ops/compressed/compression/gpu_compressor.cc',
+                        'horovod/common/ops/compressed/compression/error_feedback.cc',
+                        'horovod/common/ops/compressed/compression/vector_operations.cc',
+                        'horovod/common/ops/compressed/compression/feedback_buffer_manager.cc']
+
         COMPILE_FLAGS += shlex.split(mpi_flags)
         LINK_FLAGS += shlex.split(mpi_flags)
 
@@ -820,18 +835,6 @@ def get_common_options(build_ext):
     if have_cuda:
         set_cuda_options(build_ext, COMPILE_FLAGS, MACROS, INCLUDES, SOURCES, have_mpi, LIBRARY_DIRS, LIBRARIES)
         INCLUDES += ['horovod/common/ops/cuda']
-        if have_mpi and grad_compression:
-            MACROS += [('GRAD_COMPRESSION', '1')]
-            SOURCES += ['horovod/common/ops/compressed/compression/cuda/cuda_functions.cu.cc',
-                        'horovod/common/ops/compressed/mpi_gpu_compressed_operations.cc',
-                        'horovod/common/ops/compressed/reducers/all_broadcast.cc',
-                        'horovod/common/ops/compressed/reducers/scatter_allgather.cc',
-                        'horovod/common/ops/compressed/reducers/ring.cc',
-                        'horovod/common/ops/compressed/utils.cc',
-                        'horovod/common/ops/compressed/compression/compressor.cc',
-                        'horovod/common/ops/compressed/compression/error_feedback.cc',
-                        'horovod/common/ops/compressed/compression/vector_operations.cc',
-                        'horovod/common/ops/compressed/compression/feedback_buffer_manager.cc']
 
 
     if have_rocm:

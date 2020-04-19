@@ -18,44 +18,47 @@ import torch
 
 
 class Compressor(object):
+    def __init__(self):
+        pass
     """Interface for compressing and decompressing a given tensor."""
-    @staticmethod
-    def compress(tensor):
+    def compress(self, tensor, step):
         """Compresses a tensor and returns it with the context needed to decompress it."""
         pass
 
-    @staticmethod
-    def decompress(tensor, ctx):
+    def decompress(self, tensor, ctx):
         """Decompress the tensor with the given context."""
         pass
 
 
 class NoneCompressor(Compressor):
     """Default no-op compression."""
-    @staticmethod
-    def compress(tensor):
+    def compress(self, p, step):
         """Returns the tensor unmodified."""
-        return tensor, None
+        if p.requires_grad:
+            return p.grad, None
+        else:
+            return p, None
 
-    @staticmethod
-    def decompress(tensor, ctx):
+    def decompress(self, tensor, ctx):
         """Returns the tensor unmodified."""
         return tensor
 
 
 class FP16Compressor(Compressor):
     """Compress all floating point gradients to 16-bit."""
-    @staticmethod
-    def compress(tensor):
+    def compress(self, p, step):
         """Downcasts the tensor to 16-bit."""
+        if p.requires_grad:
+            tensor = p.grad
+        else:
+            tensor = p
         tensor_compressed = tensor
         if tensor.dtype.is_floating_point:
             # Only allow compression from other floating point types
             tensor_compressed = tensor.type(torch.float16)
         return tensor_compressed, tensor.dtype
 
-    @staticmethod
-    def decompress(tensor, ctx):
+    def decompress(self, tensor, ctx):
         """Upcasts the tensor to the initialization dtype."""
         tensor_decompressed = tensor
         dtype = ctx
@@ -68,7 +71,7 @@ class Compression(object):
     """Optional gradient compression algorithm used during allreduce."""
 
     """Do not compress the gradients. This is the default."""
-    none = NoneCompressor
+    none = NoneCompressor()
 
     """Compress all floating point gradients to 16-bit."""
-    fp16 = FP16Compressor
+    fp16 = FP16Compressor()

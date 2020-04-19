@@ -1,26 +1,41 @@
 #include "vector_operations.h"
 #include "cuda/cuda_functions.h"
+#include <omp.h>
 
 namespace horovod {
 namespace common {
 
-void CPUSummator::Add(float* x, float* y, float* sum, int64_t num_elems,
-    int device) {
+void CPUSummator::Add(float* x, float* y, float* sum, int64_t num_elems) {
+  int np;
+#pragma omp parallel for simd num_threads(num_threads_)
   for (int i = 0; i < num_elems; i++) {
     sum[i] = x[i] + y[i];
   }
 }
 
-void GPUSummator::Add(float* x, float* y, float* sum, int64_t num_elems, int device) {
-  CUDA_add(num_elems, x, y, sum,
-           gpu_context_->streams[global_state_->current_nccl_stream][device]);
+void GPUSummator::Add(float* x, float* y, float* sum, int64_t num_elems) {
+//  CUDA_add(num_elems, x, y, sum,
+//           gpu_context_->streams[global_state_->current_nccl_stream][device_]);
+  CUDA_add(num_elems, x, y, sum, 0);
 }
+
+void GPUSummator::Finalize() {
+  gpu_context_->StreamSynchronize(0);
+}
+
+void Summator::Add(float* x, TensorTableEntry& entry, int64_t num_elems) {
+  device_ = entry.device;
+  auto data = ((float*)entry.tensor->data());
+  Add(x, data, data, num_elems);
+}
+
+void Summator::Finalize() {}
 
 void Summator::Add(float* x,
                    std::vector<horovod::common::TensorTableEntry>& entries,
                    int64_t fusion_offset, int64_t global_offset,
                    int64_t num_elems, bool inplace) {
-  int device = entries[0].device;
+  device_ = entries[0].device;
 
   if (entries.size() == 1) {
     auto input_data =
@@ -31,7 +46,8 @@ void Summator::Add(float* x,
     auto output_data =
         ((float*)entries[0].output->data()) + fusion_offset + global_offset;
 
-    Add(x, input_data, output_data, num_elems, device);
+    Add(x, input_data, output_data, num_elems);
+    Finalize();
     return;
   }
 
@@ -66,10 +82,11 @@ void Summator::Add(float* x,
     if (inplace)
       input_data = ((float*)entry.output->data()) + buffer_offset;
     auto output_data = ((float*)entry.output->data()) + buffer_offset;
-    Add(x, input_data, output_data, nelem, device);
+    Add(x, input_data, output_data, nelem);
     offset_cumm += entry.tensor->shape().num_elements();
     x += nelem;
   }
+  Finalize();
 }
 
 } // namespace common

@@ -6,6 +6,7 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import torch.utils.data.distributed
 import horovod.torch as hvd
+import time
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
@@ -174,7 +175,10 @@ def test():
         print('\nTest set: Average loss: {:.4f}, Accuracy: {:.2f}%\n'.format(
             test_loss, 100. * test_accuracy))
 
-
+start = time.time()
 for epoch in range(1, args.epochs + 1):
     train(epoch)
     test()
+if hvd.rank() == 0:
+    print("Total time: ", time.time() - start)
+    print("Allreduce {}, Communication {}, Compression {}, Meta {}".format(hvd.allreduce_time(), hvd.communication_time(), hvd.compression_time(), hvd.meta_info_time()))

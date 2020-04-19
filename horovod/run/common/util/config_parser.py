@@ -171,8 +171,8 @@ def validate_config_args(args):
         raise ValueError('{}={} must be in [0, 1]'.format('autotune_gaussian_process_noise',
                                                           args.autotune_gaussian_process_noise))
     bits = args.quantization_bits
-    if bits is not None and (bits < 1 or bits > 8) and bits != 0:
-        raise ValueError('{}={} must be in [0, 8]'.format('quantization_bits',
+    if bits is not None and (bits < 0 or bits > 8) and bits != 32:
+        raise ValueError('{}={} must be in [0, 8] or 32'.format('quantization_bits',
                                                                 args.quantization_bits))
     _validate_arg_nonnegative(args, 'stall_check_warning_time_seconds')
     _validate_arg_nonnegative(args, 'stall_check_shutdown_time_seconds')

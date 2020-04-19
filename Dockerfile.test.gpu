@@ -7,14 +7,14 @@ ARG CUDA_DOCKER_VERSION=10.0-devel-ubuntu16.04
 ARG CUDNN_VERSION=7.6.0.64-1+cuda10.0
 ARG NCCL_VERSION_OVERRIDE=2.4.7-1+cuda10.0
 ARG MPI_KIND=OpenMPI
-ARG PYTHON_VERSION=2.7
+ARG PYTHON_VERSION=3.5
 ARG TENSORFLOW_PACKAGE=tensorflow-gpu==1.14.0
 ARG KERAS_PACKAGE=keras==2.2.4
 ARG PYTORCH_PACKAGE=torch==1.2.0
 ARG TORCHVISION_PACKAGE=torchvision==0.4.0
 ARG MXNET_PACKAGE=mxnet-cu100==1.5.0
 ARG PYSPARK_PACKAGE=pyspark==2.4.0
-ARG HOROVOD_BUILD_FLAGS="HOROVOD_GPU_ALLREDUCE=NCCL HOROVOD_GPU_BROADCAST=NCCL"
+eARG HOROVOD_BUILD_FLAGS="HOROVOD_GPU_ALLREDUCE=NCCL HOROVOD_GPU_BROADCAST=NCCL"
 ARG HOROVOD_MIXED_INSTALL=0
 
 # Set default shell to /bin/bash
@@ -32,6 +32,15 @@ RUN apt-get update -qq && apt-get install -y --allow-downgrades --allow-change-h
         libcudnn7=${CUDNN_VERSION} \
         libnccl2=${NCCL_VERSION_OVERRIDE} \
         libnccl-dev=${NCCL_VERSION_OVERRIDE}
+
+# Install OpenSSH for MPI to communicate between containers
+RUN apt-get install -y --no-install-recommends openssh-client openssh-server && \
+    mkdir -p /var/run/sshd
+
+# Allow OpenSSH to talk to containers without asking for confirmation
+RUN cat /etc/ssh/ssh_config | grep -v StrictHostKeyChecking > /etc/ssh/ssh_config.new && \
+    echo "    StrictHostKeyChecking no" >> /etc/ssh/ssh_config.new && \
+    mv /etc/ssh/ssh_config.new /etc/ssh/ssh_config
 
 # install g++-7
 RUN apt-get install -y --no-install-recommends software-properties-common
@@ -70,18 +79,17 @@ RUN if [[ ${MPI_KIND} != "None" ]]; then \
     fi
 
 ### END OF CACHE ###
-COPY . /horovod
 
 # Install TensorFlow.
-RUN pip install ${TENSORFLOW_PACKAGE}
+#RUN pip install ${TENSORFLOW_PACKAGE}
 
 # Install Keras.
 # Pin scipy<1.4.0: https://github.com/scipy/scipy/issues/11237
-RUN pip install ${KERAS_PACKAGE} h5py "scipy<1.4.0" pandas
-RUN mkdir -p ~/.keras
-RUN ldconfig /usr/local/cuda/targets/x86_64-linux/lib/stubs && \
-    python -c "from keras.datasets import mnist; mnist.load_data()" && \
-    ldconfig
+#RUN pip install ${KERAS_PACKAGE} h5py "scipy<1.4.0" pandas
+#RUN mkdir -p ~/.keras
+#RUN ldconfig /usr/local/cuda/targets/x86_64-linux/lib/stubs && \
+#    python -c "from keras.datasets import mnist; mnist.load_data()" && \
+#    ldconfig
 
 # Install PyTorch.
 RUN pip install future typing
@@ -95,7 +103,9 @@ RUN if [[ ${PYTORCH_PACKAGE} == "torch-nightly" ]]; then \
 RUN pip install "Pillow<7.0" --no-deps
 
 # Install MXNet.
-RUN pip install ${MXNET_PACKAGE}
+#RUN pip install ${MXNET_PACKAGE}
+
+COPY . /horovod
 
 # Install Horovod.
 RUN cd /horovod && python setup.py sdist
