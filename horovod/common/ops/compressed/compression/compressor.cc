@@ -133,8 +133,6 @@ void Compressor::Decompress(unsigned char* input_data, unsigned char* output,
     int64_t nelem = 0;
     int64_t buffer_offset = 0;
     int64_t cumm_decompressed = 0;
-    if (global_state_->controller->GetRank() == 0)
-      std::cout << "Decompress Total Size " << chunk_num_elems << std::endl;
     for (auto& entry : entries) {
       nelem = entry.tensor->shape().num_elements();
       if (offset_cumm + nelem <= fusion_offset) {
@@ -156,8 +154,6 @@ void Compressor::Decompress(unsigned char* input_data, unsigned char* output,
                 std::max(offset_cumm, fusion_offset);
       }
       buffer_offset = std::max(offset_cumm - fusion_offset, 0l);
-      if (global_state_->controller->GetRank() == 0)
-        std::cout << "Decompress Offset " << cumm_decompressed / sizeof(float) << " Size: " << nelem << std::endl;
       output = output + buffer_offset * sizeof(float);
       Decompress(input_data, output, nelem);
       cumm_decompressed += BufferSize(nelem);
@@ -224,8 +220,6 @@ int64_t Compressor::Compress(
       unsigned char* feedback_data = nullptr;
       if (error_feedback.isEnabled())
         feedback_data = error_feedback.GetData(entry) + offset;
-      if (global_state_->controller->GetRank() == 0)
-        std::cout << "Compress Size " << nelem << std::endl;
       compressed_size = Compress(tensor_data, output, feedback_data, nelem);
       offset_cumm += entry.tensor->shape().num_elements();
       output += compressed_size;
@@ -251,8 +245,6 @@ void Compressor::Decompress(
     int64_t nelem = 0;
     int64_t buffer_offset = 0;
     int64_t cumm_decompressed = 0;
-    if (global_state_->controller->GetRank() == 0)
-      std::cout << "Decompress Total Size " << chunk_num_elems << std::endl;
 
     for (auto& entry : entries) {
       nelem = entry.tensor->shape().num_elements();
@@ -278,8 +270,6 @@ void Compressor::Decompress(
       }
       auto output = ((unsigned char*)entry.output->data()) +
                     buffer_offset * sizeof(float);
-      if (global_state_->controller->GetRank() == 0)
-        std::cout << "Decompress Offset " << buffer_offset << " Size: " << nelem << std::endl;
 
       Decompress(input_data + cumm_decompressed, output, nelem);
       cumm_decompressed += BufferSize(nelem);
