@@ -143,7 +143,7 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                                    GetNCCLDataType(first_entry.tensor), ncclSum,
                                    *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream);
   nccl_context_->ErrorCheck("ncclAllReduce", nccl_result);
-  global_state_->start_nccl_allreduce = clock_::now();
+//  global_state_->start_nccl_allreduce = clock_::now();
   if (global_state_->timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_ALLREDUCE, *gpu_op_context_.stream);
   }

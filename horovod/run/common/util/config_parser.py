@@ -231,7 +231,7 @@ def set_env_from_args(env, args):
     _add_arg_to_env(env, HOROVOD_LOG_LEVEL, args.log_level)
     _add_arg_to_env(env, HOROVOD_LOG_HIDE_TIME, args.log_hide_timestamp, identity)
 
-    _add_arg_to_env(env, HOROVOD_QUANTIZATION_BITS, args.quantization_bits if args.quantization_bits > 0 else None)
+    _add_arg_to_env(env, HOROVOD_QUANTIZATION_BITS, args.quantization_bits if args.quantization_bits and args.quantization_bits > 0 else None)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_BUCKET_SIZE, args.compression_bucket_size)
     _add_arg_to_env(env, HOROVOD_REDUCTION, args.reduction_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_COMPRESSION, args.compression_type, enum_tf)

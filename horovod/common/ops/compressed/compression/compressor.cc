@@ -123,16 +123,17 @@ int64_t Compressor::Compress(
   return total_compressed_size;
 }
 
-void Compressor::Decompress(unsigned char* input_data, unsigned char* output,
+void Compressor::Decompress(unsigned char* input_data, unsigned char* output_data,
                             const std::vector<TensorTableEntry>& entries,
                             int64_t fusion_offset, int64_t chunk_num_elems) {
   if (entries.size() == 1) {
-    Decompress(input_data, output, chunk_num_elems);
+    Decompress(input_data, output_data, chunk_num_elems);
   } else {
     int64_t offset_cumm = 0;
     int64_t nelem = 0;
     int64_t buffer_offset = 0;
     int64_t cumm_decompressed = 0;
+    unsigned char* output;
     for (auto& entry : entries) {
       nelem = entry.tensor->shape().num_elements();
       if (offset_cumm + nelem <= fusion_offset) {
@@ -154,10 +155,9 @@ void Compressor::Decompress(unsigned char* input_data, unsigned char* output,
                 std::max(offset_cumm, fusion_offset);
       }
       buffer_offset = std::max(offset_cumm - fusion_offset, 0l);
-      output = output + buffer_offset * sizeof(float);
-      Decompress(input_data, output, nelem);
+      output = output_data + buffer_offset * sizeof(float);
+      Decompress(input_data + cumm_decompressed, output, nelem);
       cumm_decompressed += BufferSize(nelem);
-      input_data += BufferSize(nelem);
       offset_cumm += entry.tensor->shape().num_elements();
     }
   }
@@ -261,7 +261,6 @@ void Compressor::Decompress(
         nelem = offset_cumm + nelem - fusion_offset;
         buffer_offset = entry.tensor->shape().num_elements() - nelem;
       }
-
       if (std::max(offset_cumm, fusion_offset) + nelem >
           fusion_offset + chunk_num_elems) {
         // if layer doesn't fit the rest of slice.

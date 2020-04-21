@@ -65,7 +65,7 @@ Status GPUOpContext::FinalizeGPUQueue(const std::vector<TensorTableEntry>& entri
     gpu_context->SetDevice(first_entry.device);
 
     gpu_context->WaitForEvents(evt_queue, entries, timeline);
-    global_state->allreduce_time += time_since(global_state->start_nccl_allreduce);
+//    global_state->allreduce_time += time_since(global_state->start_nccl_allreduce);
     if (free_host_buffer && cpu_buffer != nullptr) {
       free(cpu_buffer);
     }

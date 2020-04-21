@@ -43,7 +43,7 @@ Status MPIAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Respo
 
   // Do allreduce.
   timeline.ActivityStartAll(entries, MPI_ALLREDUCE);
-  auto start = clock_::now();
+//  auto start = clock_::now();
   const void* sendbuf = entries.size() > 1 || first_entry.tensor->data() == first_entry.output->data()
                         ? MPI_IN_PLACE : first_entry.tensor->data();
   int op = MPI_Allreduce(sendbuf, buffer_data,
@@ -62,7 +62,7 @@ Status MPIAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Respo
     MemcpyOutFusionBuffer(buffer_data, entries);
     timeline.ActivityEndAll(entries);
   }
-  global_state_->allreduce_time += time_since(start);
+//  global_state_->allreduce_time += time_since(start);
   return Status::OK();
 }
 

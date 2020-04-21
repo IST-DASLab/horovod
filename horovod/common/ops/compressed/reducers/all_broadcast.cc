@@ -28,13 +28,6 @@ MPI_Allreduce_AllBroadcast::Init(const std::vector<TensorTableEntry>& entries) {
   int64_t buffer_size =
       allocated_compression_buffer_size_send +
       allocated_compression_buffer_size_recv * (world_size - 1) + chunk_size;
-  if (global_state_->controller->GetRank() == 0) {
-    std::cout << "Allocate memory " << buffer_size << std::endl;
-    std::cout << "Chunk size " << chunk_size << std::endl;
-    std::cout << "Send size " << allocated_compression_buffer_size_send << std::endl;
-    std::cout << "Recv size " << allocated_compression_buffer_size_recv << std::endl;
-    std::cout << "World " << world_size << std::endl;
-  }
 
   auto status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -88,6 +81,7 @@ void printDebug(float *bf, int num_elems, int device) {
     std::cout << host_buf[i] << " ";
   }
   std::cout << std::endl;
+  std::cout << std::flush;
   if (device != CPU_DEVICE_ID)
     delete [] host_buf;
 }
@@ -122,21 +116,13 @@ Status MPI_Allreduce_AllBroadcast::AllreduceDivision(
     count++;
   }
   MPI_Waitall((int)requests.size(), &requests[0], MPI_STATUSES_IGNORE);
-  MPI_Barrier(comm);
+//  MPI_Barrier(comm);
   global_state_->communication_time += time_since(start);
   compressor_->Decompress(gradients_send_, entries, 0, global_offset,
                           num_elements);
-  if (global_state_->controller->GetRank() == 0) {
-    std::cout << "My Values: ";
-    printDebug((float*)entries[0].output->data(), 8, entries[0].device);
-  }
   for (int i = 0; i < world_size - 1; i++) {
     compressor_->Decompress(gradients_recv_ + i * send_rcv_size,
                             decompress_buffer_, entries, 0, num_elements);
-    if (global_state_->controller->GetRank() == 0) {
-      std::cout << "Their Values: ";
-      printDebug((float*)decompress_buffer_, 8, entries[0].device);
-    }
 
     summator_->Add((float*)decompress_buffer_, entries, 0, global_offset,
                    num_elements, true);
