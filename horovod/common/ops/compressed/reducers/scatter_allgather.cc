@@ -93,7 +93,23 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   unsigned char* send_buf = gradients_send_;
   unsigned char* recv_buf = gradients_recv_;
   std::vector<MPI_Request> requests;
-
+  std::queue<int> send_sizes;
+  for (int node_rank = 0; node_rank < world_size; node_rank++) {
+    if (node_rank == rank) {
+      continue;
+    }
+    int start_offset =
+        (num_elems_per_node * node_rank) + std::min(residue, node_rank);
+    send_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
+    send_compressed_size = round_to(
+        compressor_->Compress(send_buf, entries, error_feedback_, start_offset,
+                              global_offset, send_num_elems),
+        ALIGNMENT_UNIT);
+    send_buf += send_compressed_size;
+    send_sizes.push(send_compressed_size);
+  }
+  compressor_->Finalize();
+  send_buf = gradients_send_;
   auto start = clock_::now();
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank == rank) {
@@ -102,21 +118,14 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     requests.push_back(MPI_Request());
     MPI_Irecv(recv_buf, recv_compressed_size, MPI_UNSIGNED_CHAR, node_rank, 0,
               comm, &requests.back());
-    int start_offset =
-        (num_elems_per_node * node_rank) + std::min(residue, node_rank);
-    send_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
-
-    send_compressed_size = round_to(
-        compressor_->Compress(send_buf, entries, error_feedback_, start_offset,
-                              global_offset, send_num_elems),
-        ALIGNMENT_UNIT);
-
+    send_compressed_size = send_sizes.front();
     requests.push_back(MPI_Request());
     MPI_Isend(send_buf, send_compressed_size, MPI_UNSIGNED_CHAR, node_rank, 0,
               comm, &requests.back());
 
     recv_buf += recv_compressed_size;
     send_buf += send_compressed_size;
+    send_sizes.pop();
   }
   // TODO: handling errors!!!
   MPI_Waitall((int)requests.size(), &requests[0], MPI_STATUSES_IGNORE);
@@ -127,7 +136,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     compressor_->Decompress(recv_buf, decompress_buffer_, entries, start_elem,
                             recv_num_elems);
     summator_->Add((float*)decompress_buffer_, entries, start_elem,
-                   global_offset, recv_num_elems, i != 0);
+                   global_offset, recv_num_elems, i == 0);
     recv_buf += recv_compressed_size;
   }
 
@@ -136,7 +145,8 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
                         global_offset, recv_num_elems, false);
   compressor_->Decompress(gradients_send_, entries, start_elem, global_offset,
                           recv_num_elems);
-
+  compressor_->Finalize();
+  summator_->Finalize();
   recv_buf = gradients_recv_;
 
   // second round of MPI communication. receive the sums from other nodes
@@ -186,6 +196,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
                             global_offset, recv_num_elems);
     recv_buf += recv_compressed_size;
   }
+  compressor_->Finalize();
   global_state_->compression_time = compressor_->getCompressionTime();
   global_state_->meta_info_time = compressor_->getMetaInfoTime();
   return Status::OK();

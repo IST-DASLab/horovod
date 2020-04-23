@@ -119,7 +119,7 @@ int64_t Compressor::Compress(
       total_compressed_size += compressed_size;
     }
   }
-  Finalize();
+//  Finalize();
   return total_compressed_size;
 }
 
@@ -161,7 +161,7 @@ void Compressor::Decompress(unsigned char* input_data, unsigned char* output_dat
       offset_cumm += entry.tensor->shape().num_elements();
     }
   }
-  Finalize();
+//  Finalize();
 }
 
 int64_t Compressor::Compress(
@@ -226,7 +226,7 @@ int64_t Compressor::Compress(
       total_compressed_size += compressed_size;
     }
   }
-  Finalize();
+//  Finalize();
   return total_compressed_size;
 }
 
@@ -275,7 +275,7 @@ void Compressor::Decompress(
       offset_cumm += entry.tensor->shape().num_elements();
     }
   }
-  Finalize();
+//  Finalize();
 }
 
 void Compressor::Finalize() {

@@ -29,7 +29,6 @@ void GPUDummyCompressor::Decompress(unsigned char* input_data,
   gpu_context_->MemcpyAsyncD2D(
       (void*)output, (void*)input_data, processed_size,
       gpu_context_->streams[global_state_->current_nccl_stream][device_]);
-  Finalize();
 }
 
 void GPUDummyCompressor::Finalize() {

@@ -123,6 +123,7 @@ enum ReductionType {
   AllBroadcast,
   ScatterAllgather,
   Ring,
+  NCCL_Allgather,
   NoneReduction
 };
 

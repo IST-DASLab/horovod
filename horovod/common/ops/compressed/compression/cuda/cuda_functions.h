@@ -7,8 +7,8 @@
 #include <curand_kernel.h>
 
 //#define CurandState curandState
-#define CurandState curandStatePhilox4_32_10_t
-//#define CurandState int
+//#define CurandState curandStatePhilox4_32_10_t
+#define CurandState int
 
 int CUDA_get_curand_array_size(int num_elems);
 

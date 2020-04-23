@@ -5,6 +5,7 @@
 #include "reducers/scatter_allgather.h"
 #include "compression/gpu_compressor.h"
 #include "utils.h"
+#include "common.h"
 
 namespace horovod {
 namespace common {
@@ -15,35 +16,7 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
     : MPI_GPUAllreduce(mpi_context, gpu_context, global_state) {
   auto reduction_type = GetEnumEnvOrDefault<ReductionType>(
       HOROVOD_REDUCTION, ReductionType::NoneReduction);
-  auto compression_type = GetEnumEnvOrDefault<CompressionType>(
-      HOROVOD_COMPRESSION, CompressionType::NoneCompression);
-
-  auto quantization_bits = GetIntEnvOrDefault(HOROVOD_QUANTIZATION_BITS, 32);
-  Compressor* compressor;
-  if (quantization_bits == 32 || compression_type == NoneCompression) {
-    compressor = new GPUDummyCompressor(gpu_context, global_state);
-  } else {
-    switch (compression_type) {
-    case CompressionType::MaxMin:
-      compressor =
-          new GPUMaxMinQuantizer(gpu_context, global_state, quantization_bits);
-      break;
-    case CompressionType::ExpL2:
-      compressor = new GPUNormL2Quantizer(
-          gpu_context, global_state, quantization_bits, QUANTIZE_MULTIPLIER);
-      break;
-    case CompressionType::Uni:
-      compressor = new GPUNormLinfQuantizer(gpu_context, global_state,
-                                            quantization_bits);
-      break;
-    case CompressionType::ExpLinf:
-      compressor = new GPUNormLinfQuantizer(
-          gpu_context, global_state, quantization_bits, QUANTIZE_MULTIPLIER);
-      break;
-    default:
-      throw std::logic_error("Invalid compression type.");
-    }
-  }
+  Compressor* compressor = CreateGPUCompressor(gpu_context, global_state);
   auto summator = new GPUSummator(global_state, gpu_context);
   switch (reduction_type) {
   case ReductionType::AllBroadcast:
@@ -58,7 +31,7 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
     mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
         mpi_context, global_state, compressor, summator);
     break;
-  case ReductionType::NoneReduction:
+  default:
     mpiReducer = nullptr;
     break;
   }
@@ -89,13 +62,16 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
            buffer_len % tensor_fusion_threshold != 0)
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
-      mpiReducer->AllreduceDivision(num_elements_division, comm, entries,
+      status = mpiReducer->AllreduceDivision(num_elements_division, comm, entries,
                                     global_offset);
+      if (!status.ok())
+        break;
       global_offset += (tensor_fusion_threshold / sizeof(float));
     }
   } else {
-    mpiReducer->AllreduceDivision(num_elements, comm, entries, 0l);
+    status = mpiReducer->AllreduceDivision(num_elements, comm, entries, 0l);
   }
+  return status;
 }
 
 Status
@@ -106,9 +82,14 @@ MPI_GPUCompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
   //  void* buffer_data;
   size_t buffer_len = num_elements * sizeof(float);
   auto start = clock_::now();
-  Allreduce(num_elements, MPI_COMM_WORLD, entries, buffer_len);
+  auto status = Allreduce(num_elements, MPI_COMM_WORLD, entries, buffer_len);
   global_state_->allreduce_time += time_since(start);
-  return Status::OK();
+  if (!status.ok()) {
+    for (auto& e : entries) {
+      e.callback(status);
+    }
+  }
+  return status;
 }
 
 bool MPI_GPUCompressedAllReduce::Enabled(

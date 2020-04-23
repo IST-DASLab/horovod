@@ -46,7 +46,8 @@ class ReductionType(Enum):
     AllBroadcast = 0
     ScatterAllgather = 1
     Ring = 2
-    none = 3
+    NCCLAllGather = 3
+    none = 4
     def __str__(self):
         return self.name
 

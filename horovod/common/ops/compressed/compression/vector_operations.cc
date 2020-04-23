@@ -14,13 +14,13 @@ void CPUSummator::Add(float* x, float* y, float* sum, int64_t num_elems) {
 }
 
 void GPUSummator::Add(float* x, float* y, float* sum, int64_t num_elems) {
-//  CUDA_add(num_elems, x, y, sum,
-//           gpu_context_->streams[global_state_->current_nccl_stream][device_]);
-  CUDA_add(num_elems, x, y, sum, 0);
+  CUDA_add(num_elems, x, y, sum,
+           gpu_context_->streams[global_state_->current_nccl_stream][device_]);
 }
 
 void GPUSummator::Finalize() {
-  gpu_context_->StreamSynchronize(0);
+  gpu_context_->StreamSynchronize(
+      gpu_context_->streams[global_state_->current_nccl_stream][device_]);
 }
 
 void Summator::Add(float* x, TensorTableEntry& entry, int64_t num_elems) {
@@ -34,13 +34,13 @@ void Summator::Finalize() {}
 void Summator::Add(float* x,
                    std::vector<horovod::common::TensorTableEntry>& entries,
                    int64_t fusion_offset, int64_t global_offset,
-                   int64_t num_elems, bool inplace) {
+                   int64_t num_elems, bool original) {
   device_ = entries[0].device;
 
   if (entries.size() == 1) {
     auto input_data =
         ((float*)entries[0].tensor->data()) + fusion_offset + global_offset;
-    if (inplace)
+    if (!original)
       input_data =
           ((float*)entries[0].output->data()) + fusion_offset + global_offset;
     auto output_data =
@@ -79,14 +79,14 @@ void Summator::Add(float* x,
     }
 
     auto input_data = ((float*)entry.tensor->data()) + buffer_offset;
-    if (inplace)
+    if (!original)
       input_data = ((float*)entry.output->data()) + buffer_offset;
     auto output_data = ((float*)entry.output->data()) + buffer_offset;
     Add(x, input_data, output_data, nelem);
     offset_cumm += entry.tensor->shape().num_elements();
     x += nelem;
   }
-  Finalize();
+  //  Finalize();
 }
 
 } // namespace common

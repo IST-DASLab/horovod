@@ -50,19 +50,30 @@ Status MPI_Allreduce_Ring::Init(
   decompress_buffer_ = gradients_recv_ + allocated_compression_buffer_size_recv;
   status = compressor_->Init(entries);
   if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
     return status;
   }
   status = error_feedback_.Init(entries);
   if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
     return status;
   }
   return Status::OK();
+}
+
+void printDebug(float *bf, int num_elems, int device) {
+  float *host_buf;
+  if (device == CPU_DEVICE_ID) {
+    host_buf = bf;
+  } else {
+    host_buf = new float[num_elems];
+    cudaMemcpy(host_buf, bf, num_elems * sizeof(float), cudaMemcpyDeviceToHost);
+  }
+  for (int i = 0; i < num_elems; i++) {
+    std::cout << host_buf[i] << " ";
+  }
+  std::cout << std::endl;
+  std::cout << std::flush;
+  if (device != CPU_DEVICE_ID)
+    delete [] host_buf;
 }
 
 Status MPI_Allreduce_Ring::AllreduceDivision(
@@ -106,26 +117,27 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
                  ALIGNMENT_UNIT);
 
     start = clock_::now();
-    MPI_Irecv(gradients_recv_, recv_size, MPI_UNSIGNED_CHAR, recv_from, 0, comm,
-              &recv_req);
+    MPI_CHECK(MPI_Irecv(gradients_recv_, recv_size, MPI_UNSIGNED_CHAR,
+                        recv_from, 0, comm, &recv_req));
     send_size =
         round_to(compressor_->Compress(
                      gradients_send_, entries, error_feedback_, buf_send_idx,
                      global_offset, segment_size(send_segment_idx), i == 0),
                  ALIGNMENT_UNIT);
-
-    MPI_Send(gradients_send_, send_size, MPI_UNSIGNED_CHAR, send_to, 0, comm);
+    compressor_->Finalize();
+    MPI_CHECK(MPI_Send(gradients_send_, send_size, MPI_UNSIGNED_CHAR, send_to,
+                       0, comm));
 
     // Wait for recv to complete before reduction
-    MPI_Wait(&recv_req, &recv_status);
+    MPI_CHECK(MPI_Wait(&recv_req, &recv_status));
+
     global_state_->communication_time += time_since(start);
 
     compressor_->Decompress(gradients_recv_, decompress_buffer_, entries,
                             buf_recv_idx, segment_size(recv_segment_idx));
-    compressor_->Finalize();
     summator_->Add((float*)decompress_buffer_, entries, buf_recv_idx,
-                   global_offset, segment_size(recv_segment_idx), false);
-    summator_->Finalize();
+                   global_offset, segment_size(recv_segment_idx), true);
+    compressor_->Finalize();
   }
 
   send_segment_idx = (rank + world_size + 1) % world_size;
@@ -134,15 +146,15 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   unsigned char* send_buf = gradients_send_;
   // TODO no feedback.
   send_size =
-      round_to(compressor_->Compress(send_buf, entries, error_feedback_, buf_send_idx,
-                                     global_offset,
+      round_to(compressor_->Compress(send_buf, entries, error_feedback_,
+                                     buf_send_idx, global_offset,
                                      segment_size(send_segment_idx), false),
                ALIGNMENT_UNIT);
   compressor_->Decompress(send_buf, entries, buf_send_idx, global_offset,
                           segment_size(send_segment_idx));
   unsigned char* recv_buf = send_buf + send_size;
   unsigned char* compressed_buf = recv_buf;
-
+  compressor_->Finalize();
   // Propagate reduced and compressed chunks without decompression.
   for (int i = 0; i < world_size - 1; i++) {
     recv_segment_idx = (rank - i + world_size) % world_size;
@@ -156,9 +168,9 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
 
     start = clock_::now();
     // Segment to recv - at every iteration we receive segment (r-i)
-    MPI_Sendrecv(send_buf, send_size, MPI_UNSIGNED_CHAR, send_to, 0, recv_buf,
+    MPI_CHECK(MPI_Sendrecv(send_buf, send_size, MPI_UNSIGNED_CHAR, send_to, 0, recv_buf,
                  recv_size, MPI_UNSIGNED_CHAR, recv_from, 0, comm,
-                 &recv_status);
+                 &recv_status));
     global_state_->communication_time += time_since(start);
     send_buf += send_size;
     recv_buf += recv_size;
@@ -181,6 +193,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
 
     compressed_buf += recv_size;
   }
+  compressor_->Finalize();
   global_state_->compression_time = compressor_->getCompressionTime();
   global_state_->meta_info_time = compressor_->getMetaInfoTime();
   return Status::OK();

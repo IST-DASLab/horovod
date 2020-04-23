@@ -6,10 +6,10 @@
 const int MAX_THREADS_PER_BLOCK = 1024;
 const float EPS = 1e-6;
 const int PACK_SIZE = 8;
-constexpr int BLOCKS_PER_GRID(int num_elems) { return 512; }
-// constexpr int BLOCKS_PER_GRID(int num_elems) {
-//  return num_elems + (MAX_THREADS_PER_BLOCK - 1);
-//}
+//constexpr int BLOCKS_PER_GRID(int num_elems) { return 512; }
+ constexpr int BLOCKS_PER_GRID(int num_elems) {
+  return (num_elems + (MAX_THREADS_PER_BLOCK - 1)) / MAX_THREADS_PER_BLOCK;
+}
 
 #define CUDA_CHECK(condition)                                                  \
   do {                                                                         \
@@ -32,23 +32,23 @@ __device__ int toInt(unsigned char* z) {
 __global__ void _init_curand(unsigned int seed, CurandState* states) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
 /* we have to initialize the state */
-  curand_init(seed,  /* the seed can be the same for each core, here we
-  pass the
-                        time in from the CPU */
-              index, /* the sequence number should be different for each
-              core
-                        (unless you want all cores to get the same
-                        sequence of numbers for some reason - use thread
-                        id! */
-              0, /* the offset is how much extra we advance in the
-              sequence for
-                    each call, can be 0 */
-              &states[index]);
+//  curand_init(seed,  /* the seed can be the same for each core, here we
+//  pass the
+//                        time in from the CPU */
+//              index, /* the sequence number should be different for each
+//              core
+//                        (unless you want all cores to get the same
+//                        sequence of numbers for some reason - use thread
+//                        id! */
+//              0, /* the offset is how much extra we advance in the
+//              sequence for
+//                    each call, can be 0 */
+//              &states[index]);
 
-//  unsigned char z[4];
-//  for (int i = 0; i < 4; i++)
-//    z[i] = 128 + index % 128;
-//  states[index] = toInt(z);
+  unsigned char z[4];
+  for (int i = 0; i < 4; i++)
+    z[i] = 128 + index % 128;
+  states[index] = toInt(z);
 }
 
 inline __device__ void TausStep(unsigned char& z, unsigned int S1,
@@ -78,8 +78,8 @@ inline __device__ float HybridTaus(int* state_p) {
 }
 
 __device__ float GetRand(CurandState* state_p) {
-  return curand_uniform(state_p);
-//  return HybridTaus(state_p);
+//  return curand_uniform(state_p);
+  return HybridTaus(state_p);
 }
 
 __global__ void _add(int n, const float* x, const float* y, float* sum) {
@@ -94,7 +94,6 @@ void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
                       cudaStream_t stream) {
   _init_curand<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
                  stream>>>(seed, states);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 int CUDA_get_curand_array_size(int num_elems) {
@@ -393,9 +392,11 @@ PACK_ARRAY_FUNC(MaxMin)
 UNPACK_ARRAY_FUNC(MaxMin)
 PACK_ARRAY_FUNC(LinfNorm)
 UNPACK_ARRAY_FUNC(LinfNorm)
-// PACK_ARRAY_FUNC(L2Norm)
-// UNPACK_ARRAY_FUNC(L2Norm)
+//PACK_ARRAY_FUNC(L2Norm)
+//UNPACK_ARRAY_FUNC(L2Norm)
 
+//TODO: Can't use PACK_ARRAY_FUNC for L2 as we need to pass context
+// as structure allocated on gpu. So need to add additional malloc for it.
 __global__ void PackArrayL2Norm(float* input, unsigned char* meta_info,
                                 unsigned char* output, float* feedback,
                                 int num_elems, int bucket_size, int bits,
@@ -485,8 +486,8 @@ __global__ void _quantize_maxmin(unsigned char* y, const float* x,
       float d =
           (x[i * parts + j] - maxandmin[my_bucket * 2 + 1]) / unit
           //               + (curand(&local_state) % 100001) / 100000.0;
-                                           + curand_uniform(&local_state);
-//          + HybridTaus(&local_state);
+//                                           + curand_uniform(&local_state);
+          + HybridTaus(&local_state);
       int level = (int)floor(d);
       a += level << (j * bits);
       if (feedback) {
@@ -537,8 +538,8 @@ __global__ void _quantize_Linf_normalized(unsigned char* y, const float* x,
     for (int j = 0; j < parts && i * parts + j < n; j++) {
       int my_bucket = (i * parts + j) / bucket_size;
       float rand =
-                    curand_uniform(&local_state);
-//          HybridTaus(&local_state);
+//            curand_uniform(&local_state);
+          HybridTaus(&local_state);
 
       float d = x[i * parts + j] / norm[my_bucket];
       char sign = (d < -EPS);
@@ -610,8 +611,8 @@ __global__ void _quantize_L2_normalized(unsigned char* y, const float* x,
     for (int j = 0; j < parts && i * parts + j < n; j++) {
       int my_bucket = (i * parts + j) / bucket_size;
       float rand =
-                        curand_uniform(&local_state);
-//          HybridTaus(&local_state);
+//          curand_uniform(&local_state);
+          HybridTaus(&local_state);
       float d = x[i * parts + j] / norm[my_bucket];
       char sign = (d < -EPS);
       d = fabsf(d);
@@ -681,12 +682,9 @@ void CUDA_quantize_maxmin(unsigned char* input_data, unsigned char* output_data,
   MaxMin_find_meta<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
                      stream>>>(input, meta_info, num_elems, bucket_size);
   CUDA_CHECK(cudaGetLastError());
-  _quantize_maxmin<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
-      stream>>>(output, input, (float*)meta_info, feedback, num_elems, bits,
-                   bucket_size, states);
-//  PackArrayMaxMin<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
-//                    stream>>>(input, meta_info, output, feedback, num_elems,
-//                              bucket_size, bits, NULL, states);
+  PackArrayMaxMin<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
+                    stream>>>(input, meta_info, output, feedback, num_elems,
+                              bucket_size, bits, NULL, states);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -697,11 +695,9 @@ void CUDA_dequantize_maxmin(unsigned char* input_data,
   unsigned char* meta_info = input_data;
   int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   unsigned char* input = input_data + 2 * sizeof(float) * num_buckets;
-  _dequantize_maxmin<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
-      stream>>>(input, (float*)meta_info, output,num_elems, bits,bucket_size);
-//  UnpackArrayMaxMin<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
-//                      stream>>>(input, meta_info, output, num_elems,
-//                                bucket_size, bits, NULL);
+  UnpackArrayMaxMin<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
+                      stream>>>(input, meta_info, output, num_elems,
+                                bucket_size, bits, NULL);
   CUDA_CHECK(cudaGetLastError());
 }
 

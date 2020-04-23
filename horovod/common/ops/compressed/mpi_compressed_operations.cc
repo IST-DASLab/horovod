@@ -3,6 +3,7 @@
 #include "reducers/ring.h"
 #include "reducers/scatter_allgather.h"
 #include "utils.h"
+#include "common.h"
 
 namespace horovod {
 namespace common {
@@ -54,13 +55,15 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
     mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
         mpi_context, global_state, compressor, summator);
     break;
-  case ReductionType::NoneReduction:
+  default:
     mpiReducer = nullptr;
     break;
   }
 }
 
-MPI_CompressedAllReduce::~MPI_CompressedAllReduce() { delete mpiReducer; }
+MPI_CompressedAllReduce::~MPI_CompressedAllReduce() {
+  delete mpiReducer;
+}
 
 Status MPI_CompressedAllReduce::Allreduce(
     int num_elements, MPI_Comm comm,
@@ -83,13 +86,16 @@ Status MPI_CompressedAllReduce::Allreduce(
            buffer_len % tensor_fusion_threshold != 0)
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
-      mpiReducer->AllreduceDivision(num_elements_division, comm, entries,
+      status = mpiReducer->AllreduceDivision(num_elements_division, comm, entries,
                                     global_offset);
+      if (!status.ok())
+        break;
       global_offset += (tensor_fusion_threshold / sizeof(float));
     }
   } else {
-    mpiReducer->AllreduceDivision(num_elements, comm, entries, 0l);
+    status = mpiReducer->AllreduceDivision(num_elements, comm, entries, 0l);
   }
+  return status;
 }
 
 Status MPI_CompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
@@ -100,10 +106,15 @@ Status MPI_CompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
   num_elements = (int64_t)(num_elements * compress_ratio);
   buffer_len = (size_t)(buffer_len * compress_ratio);
   auto start = clock_::now();
-  Allreduce(num_elements, mpi_context_->GetMPICommunicator(Communicator::GLOBAL),
+  auto status = Allreduce(num_elements, mpi_context_->GetMPICommunicator(Communicator::GLOBAL),
       entries, buffer_len);
   global_state_->allreduce_time += time_since(start);
-  return Status::OK();
+  if (!status.ok()) {
+    for (auto& e : entries) {
+      e.callback(status);
+    }
+  }
+  return status;
 }
 
 bool MPI_CompressedAllReduce::Enabled(

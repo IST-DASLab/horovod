@@ -13,12 +13,11 @@ public:
 
   void Add(float* x, TensorTableEntry& entry, int64_t num_elems);
 
-  // @inplace stands for using output tensor from entry as input or original
-  // one. entry.output = x + (entry.output|entry.tensor) if inplace set true use
-  // output.
+  // @original parameter stands for where take the values from entry: original
+  // tensor or output.
   void Add(float* x, std::vector<TensorTableEntry>& entries,
            int64_t fusion_offset, int64_t global_offset, int64_t num_elems,
-           bool inplace);
+           bool original);
   virtual void Add(float* x, float* y, float* sum, int64_t num_elems) = 0;
   virtual void Finalize();
 

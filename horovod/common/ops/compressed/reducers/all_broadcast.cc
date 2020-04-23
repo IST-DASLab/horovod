@@ -18,7 +18,6 @@ MPI_Allreduce_AllBroadcast::Init(const std::vector<TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
-
   int64_t chunk_size =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
   int64_t allocated_compression_buffer_size_send =
@@ -54,36 +53,10 @@ MPI_Allreduce_AllBroadcast::Init(const std::vector<TensorTableEntry>& entries) {
       allocated_compression_buffer_size_recv * (world_size - 1);
   status = compressor_->Init(entries);
   if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
     return status;
   }
   status = error_feedback_.Init(entries);
-  if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
-    return status;
-  }
-  return Status::OK();
-}
-
-void printDebug(float *bf, int num_elems, int device) {
-  float *host_buf;
-  if (device == CPU_DEVICE_ID) {
-    host_buf = bf;
-  } else {
-    host_buf = new float[num_elems];
-    cudaMemcpy(host_buf, bf, num_elems * sizeof(float), cudaMemcpyDeviceToHost);
-  }
-  for (int i = 0; i < num_elems; i++) {
-    std::cout << host_buf[i] << " ";
-  }
-  std::cout << std::endl;
-  std::cout << std::flush;
-  if (device != CPU_DEVICE_ID)
-    delete [] host_buf;
+  return status;
 }
 
 Status MPI_Allreduce_AllBroadcast::AllreduceDivision(
@@ -95,27 +68,24 @@ Status MPI_Allreduce_AllBroadcast::AllreduceDivision(
   int64_t send_rcv_size =
       compressor_->Compress(gradients_send_, entries, error_feedback_, 0,
                             global_offset, num_elements);
-
+  compressor_->Finalize();
   std::vector<MPI_Request> requests;
   int count = 0;
   auto start = clock_::now();
-  MPI_Status recv_status;
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank == rank)
       continue;
-//    MPI_Sendrecv(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, node_rank, 0,
-//                 gradients_recv_ + count * send_rcv_size, send_rcv_size,
-//              MPI_UNSIGNED_CHAR, node_rank, 0, comm, &recv_status);
     requests.push_back(MPI_Request());
-    MPI_Irecv(gradients_recv_ + count * send_rcv_size, send_rcv_size,
-              MPI_UNSIGNED_CHAR, node_rank, 0, comm, &requests.back());
+    MPI_CHECK(MPI_Irecv(gradients_recv_ + count * send_rcv_size, send_rcv_size,
+              MPI_UNSIGNED_CHAR, node_rank, 0, comm, &requests.back()));
 
     requests.push_back(MPI_Request());
-    MPI_Isend(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, node_rank, 0,
-              comm, &requests.back());
+    MPI_CHECK(MPI_Isend(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, node_rank, 0,
+              comm, &requests.back()));
     count++;
   }
-  MPI_Waitall((int)requests.size(), &requests[0], MPI_STATUSES_IGNORE);
+  MPI_CHECK(MPI_Waitall((int)requests.size(), requests.data(), MPI_STATUSES_IGNORE));
+
 //  MPI_Barrier(comm);
   global_state_->communication_time += time_since(start);
   compressor_->Decompress(gradients_send_, entries, 0, global_offset,
@@ -125,11 +95,11 @@ Status MPI_Allreduce_AllBroadcast::AllreduceDivision(
                             decompress_buffer_, entries, 0, num_elements);
 
     summator_->Add((float*)decompress_buffer_, entries, 0, global_offset,
-                   num_elements, true);
+                   num_elements, false);
   }
+  compressor_->Finalize();
   global_state_->compression_time = compressor_->getCompressionTime();
   global_state_->meta_info_time = compressor_->getMetaInfoTime();
-  MPI_Barrier(comm);
   return Status::OK();
 }
 

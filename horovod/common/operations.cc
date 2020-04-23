@@ -65,6 +65,9 @@
 
 #if HAVE_NCCL
 #include "ops/nccl_operations.h"
+#if GRAD_COMPRESSION
+#include "ops/compressed/nccl_compressed_operations.h"
+#endif
 #if HAVE_MPI
 #include "ops/adasum_gpu_operations.h"
 #endif
@@ -186,6 +189,10 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 #endif
 
 #if HAVE_NCCL && HOROVOD_GPU_ALLREDUCE == 'N'
+#if GRAD_COMPRESSION
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+        new NCCL_CompressedAllreduce(&nccl_context, &gpu_context, &state)));
+#endif
   allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
       new NCCLAllreduce(&nccl_context, &gpu_context, &state)));
 #endif

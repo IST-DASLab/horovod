@@ -7,9 +7,6 @@
 namespace horovod {
 namespace common {
 
-const int BUFFER_THRESHOLD = 100;
-const float QUANTIZE_MULTIPLIER = 0.5;
-
 class MPI_CompressedAllReduce: public MPIAllreduce {
 public:
   MPI_CompressedAllReduce(MPIContext *mpi_context,
