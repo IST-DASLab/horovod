@@ -58,10 +58,6 @@ class _CrossBarrier(_DistributedOptimizer):
         for param_group in self.param_groups:
             for p in param_group['params']:
                 self._locks[p] = threading.Lock()
-        self.start_forward = 0.0
-        self.time_forward = 0.0
-        self.start_backward = 0.0
-        self.time_backward = 0.0
         if size() > 1:
             self._register_forward_hooks()
             self._register_hooks()

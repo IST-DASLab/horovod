@@ -37,6 +37,8 @@ class _BrokenBarrier(_DistributedOptimizer):
             scheduling.
             num_parallel_steps: The maximum number of training steps done in parallel with broken barrier.
         """
+        if size() <= 1:
+            raise RuntimeError("Broken Barrier doesn't support single node execution")
         self._model = model
         self._opt = hvd_opt
         self._logger = logging.getLogger("BrokenBarrier")
@@ -50,22 +52,33 @@ class _BrokenBarrier(_DistributedOptimizer):
         self._final_step = num_steps
         self._num_parallel_steps = num_parallel_steps
         self._l2_barrier_cond_ratio = l2_barrier_cond_ratio
-        # Use lock to block the forward propagation of each parameter.
-        self._locks = {}
         self._counters = {}
-        self._agg_buffers = {}
-        self._result_buffer = {}
-        self._ready_flags = {}
+        self._buffers = {}
+        self._ready_grads = {}
+        self._current_version = {}
+        self._sync_state = {}
         for param_group in self.param_groups:
             for p in param_group['params']:
-                self._locks[p] = threading.Lock()
+                if not p.requires_grad:
+                    continue
+                self._ready_grads[p] = queue.Queue()
+                self._current_version[p] = 0
                 q = queue.Queue()
                 for i in range(self._num_parallel_steps):
                     q.put(i)
                 self._counters[p] = q
-                self._agg_buffers[p] = []
-                self._ready_flags[p] = np.array([False for i in range(self._num_parallel_steps)])
-        self._barrier_constraints = [[0.0, 0.0] for i in range(self._num_parallel_steps)]
+                self._buffers[p] = []
+                # States. In case backward hook didn't work, we can find out if we need to try to sync on synchronize().
+                # False - The version of this parameter is not in sync now. True - already synchronized.
+                self._sync_state[p] = [False for i in range(self._num_parallel_steps)]
+        # Constraints for barrier. They are set per step.
+        self._barrier_constraint_lock = threading.Lock()
+        self._barrier_constraint = {
+            "step": 0,
+            "synced_value": 0.0,
+            "target_value": 0.0
+        }
+        self._barrier_broken = True
         self.start_forward = 0.0
         self.time_forward = 0.0
         self.start_backward = 0.0
@@ -94,6 +107,10 @@ class _BrokenBarrier(_DistributedOptimizer):
                     time.sleep(0.001)
                 self._event_queue.put((None, None, None))
                 self._poller.join()
+                # Finish all updates.
+                for param_group in self.param_groups:
+                    for p in param_group['params']:
+                        self._apply_gradients(p)
                 self._logger.info("training finished!")
             loss = None
             if closure is not None:
@@ -108,12 +125,7 @@ class _BrokenBarrier(_DistributedOptimizer):
     def _make_hook(self, p):
         def hook(*ignore):
             assert not p.grad.requires_grad
-            handle, ctx = self._allreduce_grad_async(p)
-            if p in self._handles:
-                self._handles[p].append((handle, ctx))
-            else:
-                self._handles[p] = [(handle, ctx)]
-
+            self._allreduce_grad_async(p)
         return hook
 
     def zero_grad(self):
@@ -121,9 +133,10 @@ class _BrokenBarrier(_DistributedOptimizer):
         Clears the gradients of all optimized tensors.
         """
         if size() > 1 and self._step > 0:
-            for param_group in self.param_groups:
-                for p in param_group['params']:
-                    self._zero_one_grad(p)
+            pass
+            # for param_group in self.param_groups:
+            #     for p in param_group['params']:
+            #         self._zero_one_grad(p)
         else:
             self._opt.zero_grad()
 
@@ -148,26 +161,21 @@ class _BrokenBarrier(_DistributedOptimizer):
 
     def _synchronize(self):
         """Push pull missing parameters"""
-        # Reset constrains related to the previous step
-        self._reset_barrier_constraint(self._step - 1)
-        missing_p = self._requires_update - set(self._handles.keys())
+        # Reset constrains related to the previous step. _step is not incremented yet.
+        missing_p = self._requires_update - set(self._sync_state.keys())
         for p in missing_p:
-            handle, ctx = self._allreduce_grad_async(p)
-            self._handles[p] = [(handle, ctx)]
+            self._logger.info("{} is not in sync".format(self._get_parameter_name(p)))
+            self._allreduce_grad_async(p)
 
-        for p, value in self._handles.items():
-            with self._locks[p]:
-                if self._ready_flags[p][self._step % self._num_parallel_steps]:
-                    continue
-            if len(value) == 0 or value[-1][0] is None:
-                handle, ctx = self._allreduce_grad_async(p)
-                self._handles[p].append((handle, ctx))
+        for p in self._requires_update:
+            if self._sync_state[p][self._current_version[p]] is None:
+                self._logger.info("{} is not in sync".format(self._get_parameter_name(p)))
+                self._allreduce_grad_async(p)
 
     def _get_version(self, p):
         while True:
             try:
-                self.log_if_fc(p, "Queue size before get: {}".format(self._counters[p].qsize()))
-                v = self._counters[p].get(timeout=10)
+                v = self._counters[p].get()
                 return v
             except queue.Empty:
                 self._logger.error("Counter queue is empty")
@@ -175,51 +183,73 @@ class _BrokenBarrier(_DistributedOptimizer):
     def _put_version(self, p, v):
         self._counters[p].put(v)
 
-    def _get_buffer(self, p, tensor, v):
-        buffers = self._agg_buffers[p]
-        if len(buffers) > v:
-            buffers[v].copy_(tensor)
-        else:
-            assert len(buffers) == v
-            for i in range(self._num_parallel_steps):
-                buffers.append(tensor.clone())
-        return buffers[v - 1]
+    def _init_buffers(self, p, tensor):
+        buffers = self._buffers[p]
+        if len(buffers) == 0:
+            # first call
+            buffers.append(tensor)
+            for i in range(self._num_parallel_steps - 1):
+                buffers.append(torch.zeros_like(tensor))
 
-    def _update_sync_result(self, p, result, ctx):
-        with self._locks[p]:
-            self._barrier_constraints[ctx["step"] % self._num_parallel_steps][0] += ctx["l2_norm"]
-            # self._logger.debug("Update after sync constraint: step: {} {}".format(ctx["step"], self._barrier_constraints[ctx["step"] % self._num_parallel_steps][0]))
-            self._ready_flags[p][ctx["step"] % self._num_parallel_steps] = True
-            if p in self._result_buffer:
-                self._result_buffer[p].add_(result)
-            else:
-                self._result_buffer[p] = result.clone()
+    def _get_buffer(self, p, v):
+        return self._buffers[p][v]
+
+    def _apply_gradient(self, p, ctx):
+        version = ctx["version"]
+        buffers = self._buffers[p]
+        buffer = buffers[version]
+        if isinstance(self._opt, torch.optim.SGD):
+            self._sgd(p, buffer)
+        else:
+            raise ValueError("Invalid optimizer! Only support SGD.")
+        buffer.zero_()
+        self._sync_state[p][version] = None
+        self._put_version(p, version)
+        return ctx["step"]
 
     def _apply_gradients(self, p):
-        if np.sum(self._ready_flags[p]) == 0:
-            return
-        self._ready_flags[p].fill(False)
-        # self._logger.debug("{} Applying gradients {}.".format(self._desc, self._get_parameter_name(p)))
-        data = self._result_buffer[p]
-        if isinstance(self._opt, torch.optim.SGD):
-            self._sgd(p, data)
-        else:
-            raise ValueError("Invalid optimizer! Only support SGD, Adam and RMSprop.")
-        self._result_buffer[p].zero_()
+        q = self._ready_grads[p]
+        latest_step = 0
+        while not q.empty():
+            ctx = q.get()
+            latest_step = max(self._apply_gradient(p, ctx), latest_step)
+        return latest_step
 
-    def _update_barrier_constraint(self, tensor, ctx):
+    def _reset_barrier_constraint(self):
+        with self._barrier_constraint_lock:
+            if self._barrier_constraint["step"] != self._step:
+                self._barrier_constraint["step"] = self._step
+                self._barrier_constraint["synced_value"] = 0.0
+                self._barrier_constraint["target_value"] = 0.0
+                self._barrier_broken = False
+
+    def _update_barrier_constraint_target(self, tensor, ctx):
         # l2_norm = torch.norm(tensor.view(-1), p=2).item()
         l2_norm = 0.0
-        self._barrier_constraints[self._step % self._num_parallel_steps][1] += l2_norm
+        self._barrier_constraint["target_value"] += l2_norm
         ctx["l2_norm"] = l2_norm
-        # self._logger.debug("Update total constraint: {}".format(self._barrier_constraints[self._step % self._num_parallel_steps][1]))
 
-    def _reset_barrier_constraint(self, step):
-        self._barrier_constraints[step % self._num_parallel_steps] = [0., 0.]
+    def _update_barrier_constraint_synced(self, ctx):
+        self._barrier_constraint["synced_value"] += ctx["l2_norm"]
 
     def _barrier_constraint_satisfied(self):
-        prev_step = (self._step - 1) % self._num_parallel_steps
-        return self._barrier_constraints[prev_step][1] >= self._l2_barrier_cond_ratio * self._barrier_constraints[prev_step][0]
+        # We check if updates of the previous step synchronization reached a threshold
+        return self._barrier_constraint["synced_value"] >= self._l2_barrier_cond_ratio * self._barrier_constraint["target_value"]
+
+    def _on_grad_ready(self, p, output, ctx):
+        buffers = self._buffers[p]
+        version = ctx["version"]
+        buffers[version].set_(output)
+        with self._barrier_constraint_lock:
+            if self._barrier_constraint["step"] == ctx["step"] and not self._barrier_broken:
+                # if rank() == 0:
+                #     print("Ready updating {}".format(self._get_parameter_name(p)))
+                #     print("Step", ctx["step"])
+                #     print("Barrier broken", self._barrier_broken)
+                self._update_barrier_constraint_synced(ctx)
+                self._barrier_broken = self._barrier_constraint_satisfied()
+        self._sync_state[p][version] = True
+        self._ready_grads[p].put(ctx)
 
     def _allreduce_grad_async(self, p):
         """Call byteps API to allreduce gradient asynchronously
@@ -231,30 +261,35 @@ class _BrokenBarrier(_DistributedOptimizer):
         """
         name = self._get_parameter_name(p)
         tensor = p.grad
-        tensor_compressed, compression_ctx = self._compression.compress(tensor)
-        v = self._get_version(p)
-        b = self._get_buffer(p, tensor_compressed, v)
+        # tensor_compressed, compression_ctx = self._compression.compress(tensor)
+        v = self._current_version[p]
+        # reset barrier constraints, update step there.
+        # Barrier is broken, so no need to track constraints of the previous step
+        self._reset_barrier_constraint()
+
+        # Initialize buffers if they are not initialized yet.
+        # self._init_buffers(p, p.grad.data)
+        b = self._get_buffer(p, v)
         handle = allreduce_async_(b, op=Average, name="Gradient.{}.{}".format(name, v))
-        self.log_if_fc(p, "Syncing: {}".format(self._step))
         ctx = {}
-        ctx["compress"] = compression_ctx
+        # ctx["compress"] = compression_ctx
         ctx["version"] = v
         ctx["step"] = self._step
-        self._update_barrier_constraint(tensor, ctx)
+        self._update_barrier_constraint_target(tensor, ctx)
+        self._sync_state[p][v] = False
         # Add to queue to poll completion
         self._event_queue.put((p, handle, ctx))
-        return handle, ctx
 
     def log_if_fc(self, p, msg):
         l = '{} '.format(self._get_parameter_name(p))
-        if ("fc.bias" in l or "conv1.weight " == l) and rank() == 0:
+        if ("fc.bias" in l) and rank() == 0:
             self._logger.debug(l + msg)
 
     def _poll(self):
         """Poll the completion of the tensor's backward or allreduce from a FIFO event_queue"""
         while True:
             try:
-                p, handle, ctx = self._event_queue.get(timeout=10)
+                p, handle, ctx = self._event_queue.get()
             except queue.Empty:
                 self._logger.info("Event queue is empty.")
                 continue
@@ -265,13 +300,7 @@ class _BrokenBarrier(_DistributedOptimizer):
             if handle is not None and poll(handle):
                 output = synchronize(handle)
                 # p.grad.set_(self._compression.decompress(output, ctx["compress"]))
-                output.set_(self._compression.decompress(output, ctx["compress"]))
-                self._update_sync_result(p, output, ctx)
-                self.log_if_fc(p, "Synced queue size {}".format(self._counters[p].qsize()))
-                self._put_version(p, ctx["version"])
-                for i, (h, c) in enumerate(self._handles[p]):
-                    if h == handle:
-                        self._handles[p].pop(i)
+                self._on_grad_ready(p, output, ctx)
             else:
                 self._event_queue.put((p, handle, ctx))
 
@@ -293,25 +322,31 @@ class _BrokenBarrier(_DistributedOptimizer):
 
         def pre_forward_hook(mod, input):
             waited_params = set(mod.parameters())
-            prev_step = (self._step - 1) % self._num_parallel_steps
-            broken = False
-            for p in mod.parameters():
-                self.log_if_fc(p, "In preforward")
-
-            while len(waited_params) > 0 and not broken:
+            prev_step = self._step - 1
+            while True:
+                # check if there are updates and apply them.
+                synced_params = set()
                 for p in waited_params:
-                    with self._locks[p]:
-                        ready = self._ready_flags[p][prev_step]
-                        self._apply_gradients(p)
-                    if ready:
-                        waited_params.remove(p)
-                    if self._barrier_constraint_satisfied():
-                        broken = True
-                        break
+                    latest_updated = self._apply_gradients(p)
+                    if latest_updated == prev_step:
+                        synced_params.add(p)
+                    with self._barrier_constraint_lock:
+                        if self._barrier_broken:
+                            break
+                waited_params.difference_update(synced_params)
+                if len(waited_params) > 0:
+                    # yield
+                    time.sleep(0)
+                else:
+                    break
             for p in waited_params:
-                with self._locks[p]:
-                    self._apply_gradients(p)
-                # self.log_if_fc(p, "Starts forward")
+                self._apply_gradients(p)
+
+            for p in mod.parameters():
+                self._current_version[p] = self._get_version(p)
+                self._init_buffers(p, p.grad.data)
+                p.grad.data = self._get_buffer(p, self._current_version[p])
+            self._logger.debug("{} Starts forward {}.".format(self._desc, mod))
 
 
         def after_forward_hook(mod, input, result):
