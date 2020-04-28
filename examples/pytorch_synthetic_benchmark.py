@@ -13,6 +13,7 @@ import numpy as np
 from horovod.torch.cross_barrier import CrossBarrier
 from horovod.torch.broken_barrier import BrokenBarrier
 
+# import time
 # Benchmark settings
 parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -108,13 +109,28 @@ target = torch.LongTensor(args.batch_size).random_() % 1000
 if args.cuda:
     data, target = data.cuda(), target.cuda()
 
+time_forward = 0
+time_backward = 0
+time_sync = 0
 
 def benchmark_step():
+    global time_forward, time_backward, time_sync
     optimizer.zero_grad()
+    # torch.cuda.synchronize()
+    # s = time.time()
     output = model(data)
+    # torch.cuda.synchronize()
+    # time_forward += time.time() - s
     loss = F.cross_entropy(output, target)
+    # torch.cuda.synchronize()
+    # s = time.time()
     loss.backward()
+    # torch.cuda.synchronize()
+    # time_backward += time.time() - s
+    # s = time.time()
     optimizer.step()
+    # torch.cuda.synchronize()
+    # time_sync = time.time() - s
 
 
 def log(s, nl=True):
@@ -130,14 +146,15 @@ log('Number of %ss: %d' % (device, hvd.size()))
 
 # Warm-up
 log('Running warmup...')
-timeit.timeit(benchmark_step, number=args.num_warmup_batches)
+total_time = timeit.timeit(benchmark_step, number=args.num_warmup_batches)
 
 # Benchmark
 log('Running benchmark...')
 img_secs = []
 for x in range(args.num_iters):
-    time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
-    img_sec = args.batch_size * args.num_batches_per_iter / time
+    step_time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
+    total_time += step_time
+    img_sec = args.batch_size * args.num_batches_per_iter / step_time
     log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
     img_secs.append(img_sec)
 
@@ -147,3 +164,4 @@ img_sec_conf = 1.96 * np.std(img_secs)
 log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
 log('Total img/sec on %d %s(s): %.1f +-%.1f' %
     (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
+# log("Total time: {}, forward time: {}, backward time {}, sync time {}, norm time {}".format(total_time, time_forward, time_backward, time_sync, getattr(optimizer, 'norm_time', 0.0)))

@@ -79,10 +79,7 @@ class _BrokenBarrier(_DistributedOptimizer):
             "target_value": 0.0
         }
         self._barrier_broken = True
-        self.start_forward = 0.0
-        self.time_forward = 0.0
-        self.start_backward = 0.0
-        self.time_backward = 0.0
+        # self.norm_time = 0.0
         if size() > 1:
             self._register_forward_hooks()
             self._register_hooks()
@@ -219,14 +216,13 @@ class _BrokenBarrier(_DistributedOptimizer):
         with self._barrier_constraint_lock:
             if self._barrier_constraint["step"] != self._step:
                 self._barrier_constraint["step"] = self._step
-                self._barrier_constraint["synced_value"] = 0.0
-                self._barrier_constraint["target_value"] = 0.0
+                self._barrier_constraint["synced_value"] = torch.tensor([0.0], device=torch.cuda.current_device())
+                self._barrier_constraint["target_value"] = torch.tensor([0.0], device=torch.cuda.current_device())
                 self._barrier_broken = False
 
     def _update_barrier_constraint_target(self, tensor, ctx):
-        # l2_norm = torch.norm(tensor.view(-1), p=2).item()
-        l2_norm = 0.0
-        self._barrier_constraint["target_value"] += l2_norm
+        l2_norm = torch.norm(tensor.view(-1), p=2)
+        self._barrier_constraint["target_value"].add_(l2_norm)
         ctx["l2_norm"] = l2_norm
 
     def _update_barrier_constraint_synced(self, ctx):
@@ -261,6 +257,7 @@ class _BrokenBarrier(_DistributedOptimizer):
         """
         name = self._get_parameter_name(p)
         tensor = p.grad
+        # s = time.time()
         # tensor_compressed, compression_ctx = self._compression.compress(tensor)
         v = self._current_version[p]
         # reset barrier constraints, update step there.
@@ -279,6 +276,7 @@ class _BrokenBarrier(_DistributedOptimizer):
         self._sync_state[p][v] = False
         # Add to queue to poll completion
         self._event_queue.put((p, handle, ctx))
+        # self.norm_time += time.time() - s
 
     def log_if_fc(self, p, msg):
         l = '{} '.format(self._get_parameter_name(p))
