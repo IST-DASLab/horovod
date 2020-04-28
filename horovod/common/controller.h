@@ -122,7 +122,6 @@ public:
   const std::vector<int>& GetLocalCommRanks() { return local_comm_ranks_; };
   bool IsCoordinator() const { return is_coordinator_; };
   bool IsHomogeneous() const { return is_homogeneous_; };
-  double GradCompressionRate() const { return grad_compression_rate; };
 
   StallInspector& GetStallInspector() { return stall_inspector_; };
 
@@ -173,7 +172,6 @@ protected:
   bool is_coordinator_ = false;
   bool is_homogeneous_ = false;
 
-  double grad_compression_rate = 1.0;
   // ranks of the horovod world
   std::vector<int> ranks_;
 

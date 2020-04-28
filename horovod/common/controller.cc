@@ -50,9 +50,7 @@ Controller::Controller(ResponseCache& response_cache, TensorQueue& tensor_queue,
                        Timeline& timeline, ParameterManager& parameter_manager)
     : stall_inspector_(response_cache), tensor_queue_(tensor_queue),
       timeline_(timeline), response_cache_(response_cache),
-      parameter_manager_(parameter_manager),
-      grad_compression_rate(GetIntEnvOrDefault(HOROVOD_QUANTIZATION_BITS, 32)/32.0) {
-}
+      parameter_manager_(parameter_manager) {}
 
 ResponseList Controller::ComputeResponseList(std::atomic_bool& shut_down,
                                              HorovodGlobalState& state) {
