@@ -75,8 +75,8 @@ class _BrokenBarrier(_DistributedOptimizer):
         self._barrier_constraint_lock = threading.Lock()
         self._barrier_constraint = {
             "step": 0,
-            "synced_value": 0.0,
-            "target_value": 0.0
+            "synced_value": torch.tensor([0.0], device=torch.cuda.current_device()),
+            "target_value": torch.tensor([0.0], device=torch.cuda.current_device())
         }
         self._barrier_broken = True
         # self.norm_time = 0.0
@@ -216,8 +216,8 @@ class _BrokenBarrier(_DistributedOptimizer):
         with self._barrier_constraint_lock:
             if self._barrier_constraint["step"] != self._step:
                 self._barrier_constraint["step"] = self._step
-                self._barrier_constraint["synced_value"] = torch.tensor([0.0], device=torch.cuda.current_device())
-                self._barrier_constraint["target_value"] = torch.tensor([0.0], device=torch.cuda.current_device())
+                self._barrier_constraint["synced_value"].zero_()
+                self._barrier_constraint["target_value"].zero_()
                 self._barrier_broken = False
 
     def _update_barrier_constraint_target(self, tensor, ctx):
@@ -226,7 +226,7 @@ class _BrokenBarrier(_DistributedOptimizer):
         ctx["l2_norm"] = l2_norm
 
     def _update_barrier_constraint_synced(self, ctx):
-        self._barrier_constraint["synced_value"] += ctx["l2_norm"]
+        self._barrier_constraint["synced_value"].add_(ctx["l2_norm"])
 
     def _barrier_constraint_satisfied(self):
         # We check if updates of the previous step synchronization reached a threshold
