@@ -5,7 +5,7 @@ from __future__ import print_function
 from horovod.torch.compression import Compression
 from horovod.torch.mpi_ops import allreduce_async_, Average
 from horovod.torch.mpi_ops import poll, synchronize
-from horovod.torch.mpi_ops import size, rank
+from horovod.torch.mpi_ops import size, rank, local_size, nccl_built, local_rank, init
 
 import horovod.torch as hvd
 
@@ -28,21 +28,21 @@ broadcast_optimizer_state = hvd.broadcast_optimizer_state
 class _CrossBarrier(_DistributedOptimizer):
     """An optimizer that wraps a _DistributedOptimizer, intercepting allreduce operations.
     This class enables overlapping gradient allreduce with both backward and forward propagation while maintaining
-    correct dependencies. It can achieve even higher training performance than the default BytePS with proper system
+    correct dependencies. It can achieve even higher training performance than the default hvd with proper system
     parameters. To understand the principles behind barrier crossing, check the paper
     https://dl.acm.org/citation.cfm?id=3359642
     """
-    def __init__(self, model, byteps_opt, num_steps=10**6):
-        """Construct a new ScheduledOptimizer, which uses byteps optimizer under the hood for averaging gradients
+    def __init__(self, model, hvd_opt, num_steps=10**6):
+        """Construct a new ScheduledOptimizer, which uses hvd optimizer under the hood for averaging gradients
          across all workers.
         Args:
-            model: The training model. BytePS uses the model object to register hooks.
-            byteps_opt: Optimizer to use for averaging gradients and applying updates.
-            num_steps: The maximum number of training steps. BytePS needs to know when to stop cross-iteration
+            model: The training model. hvd uses the model object to register hooks.
+            hvd_opt: Optimizer to use for averaging gradients and applying updates.
+            num_steps: The maximum number of training steps. hvd needs to know when to stop cross-iteration
             scheduling.
         """
         self._model = model
-        self._opt = byteps_opt
+        self._opt = hvd_opt
         self._logger = logging.getLogger("CrossBarrier")
 
         self._logger.info("CrossBarrier is enabled.")
@@ -55,9 +55,11 @@ class _CrossBarrier(_DistributedOptimizer):
 
         # Use lock to block the forward propagation of each parameter.
         self._locks = {}
+        self._idx = {}
         for param_group in self.param_groups:
-            for p in param_group['params']:
+            for n, p in enumerate(param_group['params']):
                 self._locks[p] = threading.Lock()
+                self._idx[p] = n
         if size() > 1:
             self._register_forward_hooks()
             self._register_hooks()
@@ -66,6 +68,7 @@ class _CrossBarrier(_DistributedOptimizer):
             self._event_queue = queue.Queue()
             self._poller = threading.Thread(target=self._poll, args=())
             self._poller.start()
+        self.norm_time = 0
 
     def __getattr__(self, item):
         return getattr(self._opt, item)
@@ -91,7 +94,7 @@ class _CrossBarrier(_DistributedOptimizer):
             self._step += 1
             return loss
         else:
-            # Optimizer.step() will be triggered when user calls byteps.broadcast_optimizer_sate()
+            # Optimizer.step() will be triggered when user calls hvd.broadcast_optimizer_sate()
             super(self._opt.__class__, self._opt).step()
             self._step += 1
 
@@ -108,7 +111,7 @@ class _CrossBarrier(_DistributedOptimizer):
     def log_if_fc(self, p, msg):
         l = '{} '.format(self._get_parameter_name(p))
         if ("fc.bias" in l or "conv1.weight " == l) and rank() == 0:
-            self._logger.info(l + msg)
+            self._logger.debug(l + msg)
 
     def _get_parameter_name(self, p):
         if self._is_tensor_instance:
@@ -161,13 +164,14 @@ class _CrossBarrier(_DistributedOptimizer):
                 self._handles[p] = (handle, ctx)
 
     def _allreduce_grad_async(self, p):
-        """Call byteps API to allreduce gradient asynchronously
+        """Call hvd API to allreduce gradient asynchronously
         Arguments:
             tensor: The tensor to allreduce.
             name: The name of the tensor.
         Returns:
             an allreduce handle and context
         """
+        s = time.time()
         name = self._get_parameter_name(p)
         tensor = p.grad
         tensor_compressed, ctx = self._compression.compress(tensor)
@@ -177,6 +181,8 @@ class _CrossBarrier(_DistributedOptimizer):
         self._logger.debug("{} calls allreduce for {}".format(self._desc, self._get_parameter_name(p)))
         # Add to queue to poll completion
         self._event_queue.put((p, handle, ctx))
+        # torch.cuda.synchronize()
+        self.norm_time += time.time() - s
         return handle, ctx
 
     def _poll(self):
@@ -263,30 +269,29 @@ class _CrossBarrier(_DistributedOptimizer):
             momentum = group['momentum']
             dampening = group['dampening']
             nesterov = group['nesterov']
-
-            for gp in group['params']:
-                if self._get_parameter_name(p) != self._get_parameter_name(gp) or gp.shape != p.shape:
-                    continue
-                self._logger.debug("{} is updating {}".format(self._desc, self._get_parameter_name(p)))
-                if p.grad is None:
-                    continue
-                d_p = p.grad.data
-                if weight_decay != 0:
-                    d_p.add_(weight_decay, p.data)
-                if momentum != 0:
-                    param_state = self.state[p]
-                    if 'momentum_buffer' not in param_state:
-                        buf = param_state['momentum_buffer'] = torch.zeros_like(p.data)
-                        buf.mul_(momentum).add_(d_p)
-                    else:
-                        buf = param_state['momentum_buffer']
-                        buf.mul_(momentum).add_(1 - dampening, d_p)
-                    if nesterov:
-                        d_p = d_p.add(momentum, buf)
-                    else:
-                        d_p = buf
-                p.data.add_(-group['lr'], d_p)
-                break
+            gp = self._idx[p]
+            if self._get_parameter_name(p) != self._get_parameter_name(gp) or gp.shape != p.shape:
+                continue
+            self._logger.debug("{} is updating {}".format(self._desc, self._get_parameter_name(p)))
+            if p.grad is None:
+                continue
+            d_p = p.grad.data
+            if weight_decay != 0:
+                d_p.add_(weight_decay, p.data)
+            if momentum != 0:
+                param_state = self.state[p]
+                if 'momentum_buffer' not in param_state:
+                    buf = param_state['momentum_buffer'] = torch.zeros_like(p.data)
+                    buf.mul_(momentum).add_(d_p)
+                else:
+                    buf = param_state['momentum_buffer']
+                    buf.mul_(momentum).add_(1 - dampening, d_p)
+                if nesterov:
+                    d_p = d_p.add(momentum, buf)
+                else:
+                    d_p = buf
+            p.data.add_(-group['lr'], d_p)
+            break
 
     def _adam(self, p):
         """Performs a single optimization step using Adam optimizer on a parameter.
@@ -401,7 +406,7 @@ class _CrossBarrier(_DistributedOptimizer):
                 break
 
 
-def _init_bsc():
+def _init_hj():
     """Replace _register_hook() function in _DistributedOptimizer with empty function."""
 
     def hijack(obj, func_name):
@@ -436,10 +441,10 @@ def CrossBarrier(model,
                  compression=Compression.none,
                  backward_passes_per_step=1,
                  num_steps=10**6):
-    """Wrap Torch optimizer using BytePS DistributedOptimizer and _CrossBarrier."""
+    """Wrap Torch optimizer using hvd DistributedOptimizer and _CrossBarrier."""
     hvd_opt = _hvd_DistributedOptimizer(optimizer, named_parameters, compression, backward_passes_per_step)
     return _CrossBarrier(model, hvd_opt, num_steps)
 
 
-_init_bsc()
+_init_hj()
 _init_logger()

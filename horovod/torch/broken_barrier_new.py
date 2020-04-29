@@ -52,29 +52,28 @@ class _BrokenBarrier(_DistributedOptimizer):
         self._final_step = num_steps
         self._num_parallel_steps = num_parallel_steps
         self._l2_barrier_cond_ratio = l2_barrier_cond_ratio
+
         self._counters = {}
         self._buffers = {}
-        self._ready_grads = {}
-        self._current_version = {}
+        self._event_queues = {}
         self._sync_state = {}
+        self._current_version = {}
         self._idx = {}
         for param_group in self.param_groups:
             for n, p in enumerate(param_group['params']):
                 if not p.requires_grad:
                     continue
                 self._idx[p] = n
-                self._ready_grads[p] = queue.Queue()
-                self._current_version[p] = 0
                 q = queue.Queue()
                 for i in range(self._num_parallel_steps):
                     q.put(i)
+
+                self._current_version[p] = 0
                 self._counters[p] = q
+                self._event_queues[p] = queue.Queue()
                 self._buffers[p] = []
-                # States. In case backward hook didn't work, we can find out if we need to try to sync on synchronize().
-                # False - The version of this parameter is not in sync now. True - already synchronized.
                 self._sync_state[p] = [False for i in range(self._num_parallel_steps)]
-        # Constraints for barrier. They are set per step.
-        self._barrier_constraint_lock = threading.Lock()
+
         self._barrier_constraint = {
             "step": 0,
             "synced_value": torch.tensor([0.0], device=torch.cuda.current_device()),
@@ -85,11 +84,6 @@ class _BrokenBarrier(_DistributedOptimizer):
         if size() > 1:
             self._register_forward_hooks()
             self._register_hooks()
-
-            # Poll whether the tensor allreduce is finished.
-            self._event_queue = queue.Queue()
-            self._poller = threading.Thread(target=self._poll, args=())
-            self._poller.start()
 
     def __getattr__(self, item):
         return getattr(self._opt, item)
@@ -102,14 +96,7 @@ class _BrokenBarrier(_DistributedOptimizer):
             # if it is the final training step, wait for the completion of all tensors
             if self._step == self._final_step:
                 self._logger.debug("final step {}, waiting for allreduce completion.".format(self._final_step))
-                while not self._event_queue.empty():
-                    time.sleep(0.001)
-                self._event_queue.put((None, None, None))
-                self._poller.join()
-                # Finish all updates.
-                for param_group in self.param_groups:
-                    for p in param_group['params']:
-                        self._apply_gradients(p)
+                self._final_sync()
                 self._logger.info("training finished!")
             loss = None
             if closure is not None:
@@ -128,14 +115,12 @@ class _BrokenBarrier(_DistributedOptimizer):
         return hook
 
     def zero_grad(self):
-        """Override the default zero_grad function.
-        Clears the gradients of all optimized tensors.
+        """ Rotate buffers. Therefore, zero_grad must be called before backward.
         """
         if size() > 1 and self._step > 0:
-            pass
-            # for param_group in self.param_groups:
-            #     for p in param_group['params']:
-            #         self._zero_one_grad(p)
+            for param_group in self.param_groups:
+                for p in param_group['params']:
+                    self._zero_one_grad(p)
         else:
             self._opt.zero_grad()
 
@@ -158,6 +143,57 @@ class _BrokenBarrier(_DistributedOptimizer):
                     grad_acc.register_hook(self._make_hook(p))
                     self._grad_accs.append(grad_acc)
 
+    def _final_sync(self):
+        total_queue_size = -1
+        while total_queue_size > 0:
+            total_queue_size = 0
+            for p in self._requires_update:
+                if self._event_queues[p].qsize() > 0:
+                    self._synchronize_param(p)
+                    total_queue_size += self._event_queues[p].qsize()
+
+    def _synchronize_param(self, p):
+        q = self._event_queues[p]
+        latest_step = 0
+        size = q.qsize()
+        self.log_if_fc(p, "Queue size: {}".format(size))
+        for i in range(size):
+            try:
+                handle, ctx = q.get()
+            except queue.Empty:
+                self._logger.info("Event queue is empty.")
+                continue
+            if handle is not None and poll(handle):
+                output = synchronize(handle)
+                # p.grad.set_(self._compression.decompress(output, ctx["compress"]))
+                self._on_grad_ready(p, ctx)
+                self._apply_gradient(p, ctx, output)
+                latest_step = max(ctx["step"], latest_step)
+            else:
+                q.put((handle, ctx))
+        return latest_step
+
+    def _apply_gradient(self, p, ctx, output):
+        version = ctx["version"]
+        buffers = self._buffers[p]
+        buffer = buffers[version]
+        # Basically, buffer and output should be the same data buffer. But in case of compression/decompression,
+        # it could be different
+        buffer.set_(output)
+        if isinstance(self._opt, torch.optim.SGD):
+            self._sgd(p, buffer)
+        else:
+            raise ValueError("Invalid optimizer! Only support SGD.")
+        buffer.zero_()
+        self._put_version(p, version)
+
+    def _on_grad_ready(self, p, ctx):
+        if self._barrier_constraint["step"] == ctx["step"] and not self._barrier_broken:
+            self._update_barrier_constraint_synced(ctx)
+            self._barrier_broken = True if self._l2_barrier_cond_ratio == 0.0 else self._barrier_constraint_satisfied()
+            self.log_if_fc(p, "Barrier broken: ".format(self._barrier_broken))
+
+
     def _synchronize(self):
         """Push pull missing parameters"""
         # Reset constrains related to the previous step. _step is not incremented yet.
@@ -170,6 +206,10 @@ class _BrokenBarrier(_DistributedOptimizer):
             if self._sync_state[p][self._current_version[p]] is None:
                 self._logger.info("{} is not in sync".format(self._get_parameter_name(p)))
                 self._allreduce_grad_async(p)
+
+        for param_group in self.param_groups:
+            for p in reversed(param_group['params']):
+                self._synchronize_param(p)
 
     def _get_version(self, p):
         while True:
@@ -193,34 +233,12 @@ class _BrokenBarrier(_DistributedOptimizer):
     def _get_buffer(self, p, v):
         return self._buffers[p][v]
 
-    def _apply_gradient(self, p, ctx):
-        version = ctx["version"]
-        buffers = self._buffers[p]
-        buffer = buffers[version]
-        if isinstance(self._opt, torch.optim.SGD):
-            self._sgd(p, buffer)
-        else:
-            raise ValueError("Invalid optimizer! Only support SGD.")
-        buffer.zero_()
-        self._sync_state[p][version] = None
-        self._put_version(p, version)
-        return ctx["step"]
-
-    def _apply_gradients(self, p):
-        q = self._ready_grads[p]
-        latest_step = 0
-        while not q.empty():
-            ctx = q.get()
-            latest_step = max(self._apply_gradient(p, ctx), latest_step)
-        return latest_step
-
     def _reset_barrier_constraint(self):
-        with self._barrier_constraint_lock:
-            if self._barrier_constraint["step"] != self._step:
-                self._barrier_constraint["step"] = self._step
-                self._barrier_constraint["synced_value"].zero_()
-                self._barrier_constraint["target_value"].zero_()
-                self._barrier_broken = False
+        if self._barrier_constraint["step"] != self._step:
+            self._barrier_constraint["step"] = self._step
+            self._barrier_constraint["synced_value"].zero_()
+            self._barrier_constraint["target_value"].zero_()
+            self._barrier_broken = False
 
     def _update_barrier_constraint_target(self, tensor, ctx):
         if self._l2_barrier_cond_ratio == 0.0:
@@ -237,17 +255,6 @@ class _BrokenBarrier(_DistributedOptimizer):
     def _barrier_constraint_satisfied(self):
         # We check if updates of the previous step synchronization reached a threshold
         return self._barrier_constraint["synced_value"] >= self._l2_barrier_cond_ratio * self._barrier_constraint["target_value"]
-
-    def _on_grad_ready(self, p, output, ctx):
-        buffers = self._buffers[p]
-        version = ctx["version"]
-        buffers[version].set_(output)
-        with self._barrier_constraint_lock:
-            if self._barrier_constraint["step"] == ctx["step"] and not self._barrier_broken:
-                self._update_barrier_constraint_synced(ctx)
-                self._barrier_broken = self._barrier_constraint_satisfied()
-        self._sync_state[p][version] = True
-        self._ready_grads[p].put(ctx)
 
     def _allreduce_grad_async(self, p):
         """Call hvd API to allreduce gradient asynchronously
@@ -274,34 +281,15 @@ class _BrokenBarrier(_DistributedOptimizer):
         ctx["version"] = v
         ctx["step"] = self._step
         self._update_barrier_constraint_target(tensor, ctx)
-        self._sync_state[p][v] = False
+        self._sync_state[p][v] = True
         # Add to queue to poll completion
-        self._event_queue.put((p, handle, ctx))
+        self._event_queues[p].put((handle, ctx))
         self.norm_time += time.time() - s
 
     def log_if_fc(self, p, msg):
         l = '{} '.format(self._get_parameter_name(p))
         if ("fc.bias" in l or l[:-1] == "conv1.weight") and rank() == 0:
             self._logger.debug(l + msg)
-
-    def _poll(self):
-        """Poll the completion of the tensor's backward or allreduce from a FIFO event_queue"""
-        while True:
-            try:
-                p, handle, ctx = self._event_queue.get()
-            except queue.Empty:
-                self._logger.info("Event queue is empty.")
-                continue
-            if p is None:
-                self._logger.debug("poller exits.")
-                break
-            # Check whether the allreduce is finished. If so, start updating parameters.
-            if handle is not None and poll(handle):
-                output = synchronize(handle)
-                # p.grad.set_(self._compression.decompress(output, ctx["compress"]))
-                self._on_grad_ready(p, output, ctx)
-            else:
-                self._event_queue.put((p, handle, ctx))
 
     def _register_forward_hooks(self):
         """Add hook before forward propagation of each layer to block forward computation until the allreduce and
@@ -323,32 +311,18 @@ class _BrokenBarrier(_DistributedOptimizer):
             waited_params = set(mod.parameters())
             prev_step = self._step - 1
             broken = False
-            while not broken:
+            while not self._barrier_broken:
                 # check if there are updates and apply them.
                 synced_params = set()
                 for p in waited_params:
-                    latest_updated = self._apply_gradients(p)
+                    latest_updated = self._synchronize_param(p)
                     if latest_updated == prev_step:
                         synced_params.add(p)
-                    with self._barrier_constraint_lock:
-                        if self._barrier_broken or self._l2_barrier_cond_ratio == 0.0:
-                            broken = True
-                            break
                 waited_params.difference_update(synced_params)
-                if len(waited_params) > 0:
-                    # yield
-                    time.sleep(0)
-                else:
+                if len(waited_params) == 0:
                     break
-            for p in waited_params:
-                self._apply_gradients(p)
 
-            for p in mod.parameters():
-                self._current_version[p] = self._get_version(p)
-                self._init_buffers(p, p.grad.data)
-                p.grad.data = self._get_buffer(p, self._current_version[p])
             self._logger.debug("{} Starts forward {}.".format(self._desc, mod))
-
 
         def after_forward_hook(mod, input, result):
             self._logger.debug("{} finished forward {}.".format(self._desc, mod))
@@ -365,14 +339,9 @@ class _BrokenBarrier(_DistributedOptimizer):
             p: the parameter.
         """
         if p.grad is not None:
-            if p in self._locks:
-                with self._locks[p]:
-                    p.grad.detach_()
-                    p.grad.zero_()
-            else:
-                p.grad.detach_()
-                p.grad.zero_()
-
+            self._current_version[p] = self._get_version(p)
+            self._init_buffers(p, p.grad.data)
+            p.grad.data = self._get_buffer(p, self._current_version[p])
 
     """Below are the implementations of optimizers, e.g., SGD, Adam, RMSprop.
     The implementation is derived from Torch's code, except that we update one parameter each time."""
@@ -387,7 +356,7 @@ class _BrokenBarrier(_DistributedOptimizer):
             momentum = group['momentum']
             dampening = group['dampening']
             nesterov = group['nesterov']
-            gp = self._idx[p]
+            gp = group['params'][self._idx[p]]
             if self._get_parameter_name(p) != self._get_parameter_name(gp) or gp.shape != p.shape:
                 continue
             if p.grad is None:
@@ -447,7 +416,7 @@ def BrokenBarrier(model,
                   compression=Compression.none,
                   backward_passes_per_step=1,
                   num_steps=10 ** 6, num_parallel_steps=10, l2_barrier_cond_ratio=0.5):
-    """Wrap Torch optimizer using hvd DistributedOptimizer and _BrokenBarrier."""
+    """Wrap Torch optimizer using HVD DistributedOptimizer and _BrokenBarrier."""
     hvd_opt = _hvd_DistributedOptimizer(optimizer, named_parameters, compression, backward_passes_per_step)
     return _BrokenBarrier(model, hvd_opt, num_steps, num_parallel_steps, l2_barrier_cond_ratio)
 

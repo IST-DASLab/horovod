@@ -6,10 +6,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data.distributed
 from torchvision import models
-import horovod.torch as hvd
+# import horovod.torch as hvd
 import timeit
 import logging
 import numpy as np
+import horovod.torch.broken_barrier_new as hvd
 
 import time
 # Benchmark settings
@@ -35,6 +36,12 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
 
 parser.add_argument('--use-adasum', action='store_true', default=False,
                     help='use adasum algorithm to do reduction')
+
+parser.add_argument('--num-parallel-steps', type=int, default=10,
+                    help='number of sgd steps done in parallel')
+parser.add_argument('--bb-l2-ratio', type=float, default=0.5,
+                    help='Ratio of l2 norm to collect to break the barrier')
+
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -64,12 +71,13 @@ optimizer = optim.SGD(model.parameters(), lr=0.01 * lr_scaler)
 
 # Horovod: (optional) compression algorithm.
 compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
-
-# Horovod: wrap optimizer with DistributedOptimizer.
-optimizer = hvd.DistributedOptimizer(optimizer,
-                                     named_parameters=model.named_parameters(),
-                                     compression=compression,
-                                     op=hvd.Adasum if args.use_adasum else hvd.Average)
+optimizer = hvd.BrokenBarrier(model,
+                          optimizer,
+                          named_parameters=model.named_parameters(),
+                          compression=compression,
+                          num_steps=args.num_warmup_batches + args.num_iters * args.num_batches_per_iter,
+                          num_parallel_steps=args.num_parallel_steps, l2_barrier_cond_ratio=args.bb_l2_ratio)
+logger = logging.getLogger("BrokenBarrier")
 
 # Horovod: broadcast parameters & optimizer state.
 hvd.broadcast_parameters(model.state_dict(), root_rank=0)
@@ -84,12 +92,15 @@ if args.cuda:
 time_forward = 0
 time_backward = 0
 time_sync = 0
-
+time_zero = 0
 def benchmark_step():
-    global time_forward, time_backward, time_sync
+    global time_forward, time_backward, time_sync, time_zero
+    # torch.cuda.synchronize()
+    s = time.time()
     # zero grad must be called before backward!!!
     optimizer.zero_grad()
     # torch.cuda.synchronize()
+    time_zero += time.time() - s
     s = time.time()
     output = model(data)
     # torch.cuda.synchronize()
@@ -137,4 +148,4 @@ img_sec_conf = 1.96 * np.std(img_secs)
 log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
 log('Total img/sec on %d %s(s): %.1f +-%.1f' %
     (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
-log("Total time: {}, forward time: {}, backward time {}, sync time {}, norm time {}".format(total_time, time_forward, time_backward, time_sync, getattr(optimizer, 'norm_time', 0.0)))
+log("Total time: {}, forward time: {}, backward time {}, sync time {}, norm time {}. time_zero {}".format(total_time, time_forward, time_backward, time_sync, getattr(optimizer, 'norm_time', 0.0), time_zero))

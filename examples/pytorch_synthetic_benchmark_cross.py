@@ -6,10 +6,11 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data.distributed
 from torchvision import models
-import horovod.torch as hvd
+# import horovod.torch as hvd
 import timeit
 import logging
 import numpy as np
+import horovod.torch.cross_barrier as hvd
 
 import time
 # Benchmark settings
@@ -35,6 +36,7 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
 
 parser.add_argument('--use-adasum', action='store_true', default=False,
                     help='use adasum algorithm to do reduction')
+
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -64,12 +66,13 @@ optimizer = optim.SGD(model.parameters(), lr=0.01 * lr_scaler)
 
 # Horovod: (optional) compression algorithm.
 compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+logger = logging.getLogger("CrossBarrier")
+optimizer = hvd.CrossBarrier(model,
+                         optimizer,
+                         named_parameters=model.named_parameters(),
+                         compression=compression,
+                         num_steps=args.num_warmup_batches + args.num_iters * args.num_batches_per_iter)
 
-# Horovod: wrap optimizer with DistributedOptimizer.
-optimizer = hvd.DistributedOptimizer(optimizer,
-                                     named_parameters=model.named_parameters(),
-                                     compression=compression,
-                                     op=hvd.Adasum if args.use_adasum else hvd.Average)
 
 # Horovod: broadcast parameters & optimizer state.
 hvd.broadcast_parameters(model.state_dict(), root_rank=0)
@@ -87,7 +90,6 @@ time_sync = 0
 
 def benchmark_step():
     global time_forward, time_backward, time_sync
-    # zero grad must be called before backward!!!
     optimizer.zero_grad()
     # torch.cuda.synchronize()
     s = time.time()

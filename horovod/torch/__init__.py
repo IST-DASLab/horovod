@@ -141,6 +141,13 @@ class _DistributedOptimizer(torch.optim.Optimizer):
             seen.add(el)
         return dups
 
+    def _get_parameter_name(self, p):
+        if self._is_tensor_instance:
+            name = self._parameter_names.get(p.__hash__())
+        else:
+            name = self._parameter_names.get(p)
+        return name
+
     def set_backward_passes_per_step(self, passes):
         self.backward_passes_per_step = passes
         for p in self._allreduce_delay:
@@ -158,7 +165,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                     self._grad_accs.append(grad_acc)
 
     def _allreduce_grad_async(self, p):
-        name = self._parameter_names.get(p)
+        name = self._get_parameter_name(p)
         tensor = p.grad
         tensor_compressed, ctx = self._compression.compress(tensor)
 
