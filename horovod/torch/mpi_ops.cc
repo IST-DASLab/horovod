@@ -15,10 +15,13 @@
 // =============================================================================
 
 #include <chrono>
+#include <iostream>
 #include <memory>
+#include <sstream>
 #include <thread>
 
 #include "../common/operations.h"
+#include "../common/ops/compressed/utils.h"
 #include "adapter.h"
 #include "cuda_util.h"
 #include "handle_manager.h"
@@ -30,6 +33,8 @@ namespace horovod {
 namespace torch {
 
 static HandleManager handle_manager;
+using time_point = std::chrono::time_point<clock_>;
+static std::unordered_map<std::string, std::pair<time_point, double>> times;
 
 namespace {
 
@@ -55,15 +60,18 @@ int DoAllreduce(T* tensor, T* output, int divisor, char* name, int reduce_op_int
   auto hvd_output = std::make_shared<TorchTensor<DT, Dev, T>>(output);
 
   ReduceOp reduce_op = static_cast<ReduceOp>(reduce_op_int);
-
+  auto start_time = clock_::now();
+  auto& time_pair = times[name];
+  time_pair.first = start_time;
   auto enqueue_result = EnqueueTensorAllreduce(
       hvd_context, hvd_tensor, hvd_output, ready_event,
       GetOpName("allreduce", name, handle), device,
-      [handle, divisor, output](const Status& status) {
+      [handle, divisor, output, time_pair](const Status& status) {
         if (divisor > 1) {
           TensorUtil::DivideTensorInPlace<DT, Dev, T>(output, divisor);
         }
         handle_manager.MarkDone(handle, status);
+        time_pair.second += time_since(time_pair.first);
       }, reduce_op);
   ThrowIfError(enqueue_result);
 
@@ -222,6 +230,14 @@ int DoBroadcastCudaOnCPU(TC* tensor, TC* output, int root_rank, char* name) {
 
 int DoJoin(int device) {
   throw std::runtime_error("Join Op is not supported for PyTorch < 1.0");
+}
+
+void DoPrint() {
+  std::stringstream ss;
+  for (auto& vals: times) {
+    ss << vals.first << " " << vals.second.second << std::endl;
+  }
+  std::cout << ss.str();
 }
 
 #define ALLREDUCE(torch_Tensor, HorovodType, DeviceType, THTensor)                    \
@@ -393,6 +409,10 @@ BROADCAST_CUDA_ON_CPU(torch_cuda_FloatTensor, DataType::HOROVOD_FLOAT32,
 BROADCAST_CUDA_ON_CPU(torch_cuda_DoubleTensor, DataType::HOROVOD_FLOAT64,
                       THCudaDoubleTensor, THDoubleTensor)
 #endif
+
+extern "C" void horovod_torch_print_times() {
+  return DoPrint();
+}
 
 extern "C" int horovod_torch_join(int device) {
   return DoJoin(device);

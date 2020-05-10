@@ -91,6 +91,7 @@ extern "C" int horovod_torch_poll(int handle);
 extern "C" void horovod_torch_wait_and_clear(int handle);
 
 extern "C" int horovod_torch_join(int device);
+extern "C" void horovod_torch_print_times();
 
 } // namespace torch
 } // namespace horovod

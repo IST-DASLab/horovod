@@ -15,12 +15,15 @@
 // =============================================================================
 
 #include <chrono>
+#include <iostream>
 #include <memory>
+#include <sstream>
 #include <thread>
 #include <torch/extension.h>
 #include <torch/torch.h>
 
 #include "../common/operations.h"
+#include "../common/ops/compressed/utils.h"
 #include "adapter_v2.h"
 #include "cuda_util.h"
 #include "handle_manager.h"
@@ -30,6 +33,8 @@ namespace horovod {
 namespace torch {
 
 static HandleManager handle_manager;
+using time_point = std::chrono::time_point<clock_>;
+static std::unordered_map<std::string, std::pair<time_point, double>> times;
 
 namespace {
 
@@ -62,16 +67,19 @@ int DoAllreduce(::torch::Tensor tensor, ::torch::Tensor output, int divisor,
   auto hvd_output = std::make_shared<TorchTensor>(output);
 
   ReduceOp reduce_op = static_cast<ReduceOp>(reduce_op_int);
-  
+  auto start_time = clock_::now();
+  auto& time_pair = times[name];
+  time_pair.first = start_time;
   auto enqueue_result = EnqueueTensorAllreduce(
       hvd_context, hvd_tensor, hvd_output, ready_event,
       GetOpName("allreduce", name, handle), device,
-      [handle, divisor, output](const Status& status) mutable {
+      [handle, divisor, output, &time_pair, name](const Status& status) mutable {
         // Will execute in the `device` context.
         if (divisor > 1) {
           output.div_(divisor);
         }
         handle_manager.MarkDone(handle, status);
+        time_pair.second += time_since(time_pair.first);
       }, reduce_op);
   ThrowIfError(enqueue_result);
 
@@ -261,6 +269,13 @@ int DoJoin(int device) {
   return handle;
 }
 
+void DoPrint() {
+  std::stringstream ss;
+  for (auto& vals: times) {
+    ss << vals.first << " " << vals.second.second << std::endl;
+  }
+  std::cout << ss.str();
+}
 
 PYBIND11_MODULE(mpi_lib_v2, m) {
   // allreduce
@@ -364,6 +379,8 @@ PYBIND11_MODULE(mpi_lib_v2, m) {
 
   // join
   m.def("horovod_torch_join", &DoJoin);
+
+  m.def("horovod_torch_print_times", &DoPrint);
 
   // basics
   m.def("horovod_torch_poll", &PollHandle);

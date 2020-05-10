@@ -510,3 +510,8 @@ def join(device=-1):
     if not _v2_api:
         raise NotImplementedError("Join Op is not supported for PyTorch < 1.0")
     return mpi_lib.horovod_torch_join(device)
+
+def print_times():
+    if not _v2_api:
+        raise NotImplementedError("Print times is not supported for PyTorch < 1.0")
+    return mpi_lib.horovod_torch_print_times()
