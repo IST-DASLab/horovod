@@ -148,7 +148,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   send_size =
       round_to(compressor_->Compress(send_buf, entries, error_feedback_,
                                      buf_send_idx, global_offset,
-                                     segment_size(send_segment_idx), false),
+                                     segment_size(send_segment_idx), false, true),
                ALIGNMENT_UNIT);
   compressor_->Decompress(send_buf, entries, buf_send_idx, global_offset,
                           segment_size(send_segment_idx));

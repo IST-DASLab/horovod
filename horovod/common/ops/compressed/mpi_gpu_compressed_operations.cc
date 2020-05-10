@@ -10,6 +10,8 @@
 namespace horovod {
 namespace common {
 
+Compressor *global_compressor;
+
 MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
     MPIContext* mpi_context, GPUContext* gpu_context,
     HorovodGlobalState* global_state)
@@ -17,6 +19,7 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
   auto reduction_type = GetEnumEnvOrDefault<ReductionType>(
       HOROVOD_REDUCTION, ReductionType::NoneReduction);
   Compressor* compressor = CreateGPUCompressor(gpu_context, global_state);
+  global_compressor = compressor;
   auto summator = new GPUSummator(global_state, gpu_context);
   switch (reduction_type) {
   case ReductionType::AllBroadcast:
@@ -103,6 +106,10 @@ bool MPI_GPUCompressedAllReduce::Enabled(
     return false;
   }
   return GPUAllreduce::Enabled(param_manager, entries, response);
+}
+
+void SetQuantizationLevels(float* levels) {
+  global_compressor->SetQuantizationLevels(levels);
 }
 
 } // namespace common

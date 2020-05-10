@@ -19,6 +19,9 @@ void PackBucket(float* input, unsigned char* output, float* feedback,
 void UnpackBucket(unsigned char* input, float* output, int num_elems, int bits,
                   std::function<float(unsigned char)> decode);
 
+void Compressor::SetQuantizationLevels(float* levels) {
+}
+
 Compressor::Compressor(HorovodGlobalState* global_state)
     : global_state_(global_state) {
   bucket_size_ = GetIntEnvOrDefault(HOROVOD_COMPRESSION_BUCKET_SIZE,
@@ -69,11 +72,11 @@ int64_t Compressor::Compress(
     unsigned char* input_data, unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     ErrorFeedback& error_feedback, int64_t fusion_offset, int64_t global_offset,
-    int64_t chunk_num_elems) {
+    int64_t chunk_num_elems, bool disable_error_feedback) {
   int64_t total_compressed_size = 0;
   if (entries.size() == 1) {
     unsigned char* feedback_data = nullptr;
-    if (error_feedback.isEnabled())
+    if (!disable_error_feedback && error_feedback.isEnabled())
       feedback_data = error_feedback.GetData(entries[0]) +
                       (global_offset + fusion_offset) * sizeof(float);
 
@@ -110,7 +113,7 @@ int64_t Compressor::Compress(
       buffer_offset = std::max(offset_cumm - fusion_offset, 0l);
       auto offset = buffer_offset * sizeof(float);
       unsigned char* feedback_data = nullptr;
-      if (error_feedback.isEnabled())
+      if (!disable_error_feedback && error_feedback.isEnabled())
         feedback_data = error_feedback.GetData(entry) + offset;
       compressed_size =
           Compress(input_data + offset, feedback_data, output, nelem);
@@ -168,7 +171,7 @@ int64_t Compressor::Compress(
     unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     ErrorFeedback& error_feedback, int64_t fusion_offset, int64_t global_offset,
-    int64_t chunk_num_elems, bool original) {
+    int64_t chunk_num_elems, bool original, bool disable_error_feedback) {
   auto get_tensor_data =
       [original](const horovod::common::TensorTableEntry& entry) {
         if (original)
@@ -181,7 +184,7 @@ int64_t Compressor::Compress(
   if (entries.size() == 1) {
     auto offset = (fusion_offset + global_offset) * sizeof(float);
     unsigned char* feedback_data = nullptr;
-    if (error_feedback.isEnabled())
+    if (!disable_error_feedback && error_feedback.isEnabled())
       feedback_data = error_feedback.GetData(entries[0]) + offset;
     total_compressed_size = Compress(get_tensor_data(entries[0]) + offset, output, feedback_data,
                     chunk_num_elems);
@@ -218,7 +221,7 @@ int64_t Compressor::Compress(
       auto offset = buffer_offset * sizeof(float);
       auto tensor_data = get_tensor_data(entry) + offset;
       unsigned char* feedback_data = nullptr;
-      if (error_feedback.isEnabled())
+      if (!disable_error_feedback && error_feedback.isEnabled())
         feedback_data = error_feedback.GetData(entry) + offset;
       compressed_size = Compress(tensor_data, output, feedback_data, nelem);
       offset_cumm += entry.tensor->shape().num_elements();

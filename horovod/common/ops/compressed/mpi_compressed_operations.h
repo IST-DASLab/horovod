@@ -24,6 +24,8 @@ protected:
   MPIReducer *mpiReducer;
 };
 
+void SetQuantizationLevels(float* levels);
+
 } // namespace common
 } // namespace horovod
 

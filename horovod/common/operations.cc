@@ -811,6 +811,11 @@ double horovod_communication_time() {
 
 double horovod_meta_info_time() { return horovod_global.meta_info_time; }
 
+
+void horovod_set_quantization_levels(float* levels) {
+  SetQuantizationLevels(levels);
+}
+
 }
 // Contexts and controller must be initialized and the background thread
 // must be running before this function is called.

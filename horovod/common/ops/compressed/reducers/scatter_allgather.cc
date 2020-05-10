@@ -142,7 +142,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
 
   // Quantize the sum into gradients_recv_[0] and maxandmin_recv[0]
   compressor_->Compress(gradients_send_, entries, error_feedback_, start_elem,
-                        global_offset, recv_num_elems, false);
+                        global_offset, recv_num_elems, false, true);
   compressor_->Decompress(gradients_send_, entries, start_elem, global_offset,
                           recv_num_elems);
   compressor_->Finalize();

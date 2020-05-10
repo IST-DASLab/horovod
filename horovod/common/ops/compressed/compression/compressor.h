@@ -30,7 +30,8 @@ public:
   int64_t Compress(unsigned char* input_data, unsigned char* output,
                    const std::vector<TensorTableEntry>& entries,
                    ErrorFeedback& error_feedback, int64_t fusion_offset,
-                   int64_t global_offset, int64_t chunk_num_elems);
+                   int64_t global_offset, int64_t chunk_num_elems,
+                   bool disable_error_feedback=false);
   // Decompresses input_data into output.
   void Decompress(unsigned char* input_data, unsigned char* output,
                   const std::vector<TensorTableEntry>& entries,
@@ -42,7 +43,7 @@ public:
                    const std::vector<TensorTableEntry>& entries,
                    ErrorFeedback& error_feedback, int64_t fusion_offset,
                    int64_t global_offset, int64_t chunk_num_elems,
-                   bool original = true);
+                   bool original = true, bool disable_error_feedback=false);
   // Decompresses input_data into entries.
   void Decompress(unsigned char* input_data,
                   const std::vector<TensorTableEntry>& entries,
@@ -53,7 +54,7 @@ public:
   virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
   double getMetaInfoTime() const;
   double getCompressionTime() const;
-
+  void SetQuantizationLevels(float* levels);
 protected:
   // The size of the bucket.
   int bucket_size_;

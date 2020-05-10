@@ -67,6 +67,7 @@ public:
 
   Status Init(GPUContext* gpu_context,
               const std::vector<horovod::common::TensorTableEntry>& entries);
+  void SetQuantizationLevels(float* levels);
 };
 
 class GPUNormLinfQuantizer : public GPUNormalizedQuantizer,

@@ -157,6 +157,13 @@ Status GPUNormalizedQuantizer::Init(
   return Status::OK();
 }
 
+void GPUNormalizedQuantizer::SetQuantizationLevels(float* levels) {
+  int num_levels = 1 << (bits_ - 1);
+  cudaMemcpy((void*)levels_, (void*)levels,
+             sizeof(float) * num_levels,
+             cudaMemcpyHostToDevice);
+}
+
 GPUNormLinfQuantizer::GPUNormLinfQuantizer(GPUContext* gpu_context,
                                            HorovodGlobalState* global_state,
                                            int quantization_bits,
