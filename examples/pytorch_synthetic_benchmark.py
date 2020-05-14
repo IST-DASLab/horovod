@@ -9,6 +9,7 @@ from torchvision import models
 import horovod.torch as hvd
 import timeit
 import numpy as np
+import time
 
 # Benchmark settings
 parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
@@ -34,7 +35,7 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
 parser.add_argument('--use-adasum', action='store_true', default=False,
                     help='use adasum algorithm to do reduction')
 
-parser.add_argument('--num-parallel-steps', type=int, default=10,
+parser.add_argument('--num-parallel-steps', type=int, default=5,
                     help='number of sgd steps done in parallel')
 parser.add_argument('--bb-l2-ratio', type=float, default=-1.0,
                     help='Ratio of l2 norm to collect to break the barrier')
@@ -97,13 +98,27 @@ if args.cuda:
     data, target = data.cuda(), target.cuda()
 
 
+time_forward = 0
+time_backward = 0
+time_sync = 0
+time_zero = 0
 def benchmark_step():
+    global time_forward, time_backward, time_sync, time_zero
+    # torch.cuda.synchronize()
+    s = time.time()
+    # zero grad must be called before backward!!!
     optimizer.zero_grad()
+    time_zero += time.time() - s
+    s = time.time()
     output = model(data)
+    time_forward += time.time() - s
     loss = F.cross_entropy(output, target)
+    s = time.time()
     loss.backward()
+    time_backward += time.time() - s
+    s = time.time()
     optimizer.step()
-
+    time_sync += time.time() - s
 
 def log(s, nl=True):
     if hvd.rank() != 0:
@@ -118,15 +133,15 @@ log('Number of %ss: %d' % (device, hvd.size()))
 
 # Warm-up
 log('Running warmup...')
-bench_time = timeit.timeit(benchmark_step, number=args.num_warmup_batches)
+total_time = timeit.timeit(benchmark_step, number=args.num_warmup_batches)
 
 # Benchmark
 log('Running benchmark...')
 img_secs = []
 for x in range(args.num_iters):
-    time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
-    bench_time += time
-    img_sec = args.batch_size * args.num_batches_per_iter / time
+    step_time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
+    total_time += step_time
+    img_sec = args.batch_size * args.num_batches_per_iter / step_time
     log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
     img_secs.append(img_sec)
 
@@ -134,8 +149,7 @@ for x in range(args.num_iters):
 img_sec_mean = np.mean(img_secs)
 img_sec_conf = 1.96 * np.std(img_secs)
 log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
-log('Total img/sec on %d %s(s): %.1f +-%.1f' %
-    (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
-log("Total bench time: {}".format(bench_time))
+log("Total time: {}, forward time: {}, backward time {}, sync time {}, norm time {}. time_zero {}".format(total_time, time_forward, time_backward, time_sync, getattr(optimizer, 'norm_time', 0.0), time_zero))
+
 if hvd.rank() == 0:
     hvd.print_times()

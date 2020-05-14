@@ -136,6 +136,7 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
     num_elements += e.tensor->shape().num_elements();
   }
 
+  num_elements = (int)(global_state_->controller->GradCompressionRate() * num_elements);
   // Do allreduce.
   auto nccl_result = ncclAllReduce(fused_input_data, buffer_data,
                                    (size_t) num_elements,

@@ -142,7 +142,7 @@ class _BrokenBarrier(_DistributedOptimizer):
                     self._grad_accs.append(grad_acc)
 
     def _final_sync(self):
-        total_queue_size = -1
+        total_queue_size = 1
         while total_queue_size > 0:
             total_queue_size = 0
             for p in self._requires_update:
@@ -156,10 +156,10 @@ class _BrokenBarrier(_DistributedOptimizer):
         latest_step = 0
         if size == 0:
             return -1
-        self._logger.debug("{} Syncs {}.".format(self._desc, self._get_parameter_name(p)))
+        self.log_if_fc(p, "{} Syncs {} Version {}.".format(self._desc, self._get_parameter_name(p), self._current_version[p]))
         for i in range(size):
             try:
-                handle, ctx = q.get()
+                handle, ctx = q.get(block=False)
             except queue.Empty:
                 self._logger.info("Event queue is empty.")
                 continue
@@ -169,7 +169,9 @@ class _BrokenBarrier(_DistributedOptimizer):
                 self._on_grad_ready(p, ctx)
                 self._apply_gradient(p, ctx, output)
                 latest_step = max(ctx["step"], latest_step)
+                self._logger.debug("{}.{} Synced {}".format(self._get_parameter_name(p), ctx["version"],handle))
             else:
+                self.log_if_fc(p, "Can't sync {}".format(handle))
                 q.put((handle, ctx))
         return latest_step
 
@@ -214,7 +216,7 @@ class _BrokenBarrier(_DistributedOptimizer):
                 self._logger.info("{} is not in sync".format(self._get_parameter_name(p)))
                 self._allreduce_grad_async(p)
 
-        self._synchronize_all()
+        # self._synchronize_all()
 
     def _get_version(self, p):
         while True:
@@ -222,7 +224,7 @@ class _BrokenBarrier(_DistributedOptimizer):
                 v = self._counters[p].get(block=False)
                 return v
             except queue.Empty:
-                self._logger.debug("{} Counter queue is empty for {}, qsize {}.".format(self._desc, self._get_parameter_name(p), self._counters[p].qsize()))
+                self._logger.debug("{} Counter queue is empty for {}.".format(self._desc, self._get_parameter_name(p)))
                 self._synchronize_param(p)
 
     def _put_version(self, p, v):
@@ -328,6 +330,8 @@ class _BrokenBarrier(_DistributedOptimizer):
                 if len(waited_params) == 0:
                     break
                 self._synchronize_all()
+                if self._l2_barrier_cond_ratio == 0.0:
+                    self._barrier_broken = True
 
             self._logger.debug("{} Starts forward {}.".format(self._desc, mod))
 
