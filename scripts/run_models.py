@@ -1,5 +1,7 @@
 import subprocess
 import os
+# from torchvision import models
+# import torch.nn as nn
 DIR="scale_logs"
 os.makedirs(DIR, exist_ok=True)
 
@@ -11,6 +13,16 @@ models_name = ["resnet18", "resnet34", "resnet50", "resnet152",
                "mnasnet1_0", "alexnet"]
 
 
+# m = getattr(models, "alexnet")()
+#
+# for module in m.modules():
+#     if type(module) != nn.Sequential:
+#         print(module)
+#
+# for k, v in m.named_parameters():
+#     print(k)
+#
+# exit(0)
 bb = [-1.0, 0.0, 0.01, 0.5]
 
 reduction_algos = ["none", "Ring", "ScatterAllgather"]
@@ -40,4 +52,8 @@ for name in models_name:
             with open(FILE, "w") as f:
                 f.write("Reduction: {}, bb: {}\n".format(r, b))
                 p = subprocess.Popen(command, env=env, stdout=f, shell=True)
-            p.communicate()
+                try:
+                    p.wait(timeout=120)
+                except subprocess.TimeoutExpired:
+                    print("Timeout expired")
+                    continue

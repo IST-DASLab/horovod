@@ -51,7 +51,7 @@ from horovod.torch.mpi_ops import Average, Sum, Adasum
 
 import torch
 import collections
-
+import time
 
 # Please run this function in a subprocess
 def _check_has_gpu():
@@ -103,6 +103,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
         self._requires_update = set()
         self._synchronized = False
         self._should_synchronize = True
+        self.apply_time = 0
         if size() > 1:
             self._register_hooks()
 
@@ -208,7 +209,9 @@ class _DistributedOptimizer(torch.optim.Optimizer):
             self.synchronize()
         self._synchronized = False
         self._step += 1
-        return super(self.__class__, self).step(closure)
+        s = time.time()
+        v = super(self.__class__, self).step(closure)
+        self.apply_time += time.time() - s
 
     def zero_grad(self):
         if self._handles:

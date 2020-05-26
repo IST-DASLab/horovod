@@ -25,6 +25,7 @@
 #include "global_state.h"
 #include "logging.h"
 #include "operations.h"
+#include "ops/operation_manager.h"
 
 namespace horovod {
 namespace common {
@@ -655,7 +656,9 @@ ResponseList Controller::FuseResponses(std::deque<Response>& responses) {
         if (response.response_type() == new_response.response_type() &&
             response.devices() == new_response.devices() &&
             response.tensor_type() == new_response.tensor_type() &&
-            tensor_size + new_tensor_size <= TensorFusionThresholdBytes()) {
+            tensor_size + new_tensor_size <= TensorFusionThresholdBytes() &&
+            tensors_Packed(response.tensor_names_string(),
+                new_response.tensor_names_string())) {
           // These tensors will fuse together well.
           tensor_size += new_tensor_size;
           response.add_tensor_name(new_response.tensor_names()[0]);

@@ -2,6 +2,16 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from horovod.common.util import check_extension
+
+try:
+    check_extension('horovod.torch', 'HOROVOD_WITH_PYTORCH',
+                    __file__, 'mpi_lib_v2')
+except:
+    check_extension('horovod.torch', 'HOROVOD_WITH_PYTORCH',
+                    __file__, 'mpi_lib', '_mpi_lib')
+
+
 from horovod.torch.compression import Compression
 from horovod.torch.mpi_ops import allreduce_async_, Average
 from horovod.torch.mpi_ops import broadcast
@@ -53,23 +63,32 @@ class _BrokenBarrier(_DistributedOptimizer):
         self._final_step = num_steps
         self._num_parallel_steps = num_parallel_steps
         self._l2_barrier_cond_ratio = l2_barrier_cond_ratio
+        self._needs_barrier = l2_barrier_cond_ratio > 0.0 and l2_barrier_cond_ratio < 1.0
 
         self._counters = {}
         self._buffers = {}
         self._event_queues = {}
         self._sync_state = {}
+        self._last_synced = {}
         self._current_version = {}
         self._idx = {}
+        self._ctxs = {}
+        self._preforward_times = {}
+
         for param_group in self.param_groups:
             for n, p in enumerate(param_group['params']):
                 if not p.requires_grad:
                     continue
                 self._idx[p] = n
+
                 q = queue.Queue()
+                self._ctxs[p] = []
                 for i in range(self._num_parallel_steps):
                     q.put(i)
+                    self._ctxs[p].append({})
 
                 self._current_version[p] = 0
+                self._last_synced[p] = 0
                 self._counters[p] = q
                 self._event_queues[p] = queue.Queue()
                 self._buffers[p] = []
@@ -77,11 +96,14 @@ class _BrokenBarrier(_DistributedOptimizer):
 
         self._barrier_constraint = {
             "step": 0,
-            "synced_value": torch.tensor([0.0], device=torch.cuda.current_device()),
-            "target_value": torch.tensor([0.0], device=torch.cuda.current_device())
+            "synced_value": torch.tensor([0.0], device="cpu"),
+            "target_value": torch.tensor([0.0], device="cpu")
         }
         self._barrier_broken = True
         self.norm_time = 0.0
+        self.preforward_time = 0.0
+        self.apply_time = 0.0
+        self.async_call_time = 0.0
         if size() > 1:
             self._register_forward_hooks()
             self._register_hooks()
@@ -125,6 +147,9 @@ class _BrokenBarrier(_DistributedOptimizer):
         else:
             self._opt.zero_grad()
 
+    def print_preforward(self):
+        for m, v in self._preforward_times.items():
+            print(m, v)
 
     def _get_parameter_name(self, p):
         name = self._parameter_names.get(p)
@@ -150,13 +175,13 @@ class _BrokenBarrier(_DistributedOptimizer):
                     self._synchronize_param(p)
                     total_queue_size += self._event_queues[p].qsize()
 
-    def _synchronize_param(self, p):
+    def _synchronize_param(self, p, num_updates=100):
         q = self._event_queues[p]
         size = q.qsize()
-        latest_step = 0
         if size == 0:
             return -1
         self.log_if_fc(p, "{} Syncs {} Version {}.".format(self._desc, self._get_parameter_name(p), self._current_version[p]))
+        size = min(num_updates, size)
         for i in range(size):
             try:
                 handle, ctx = q.get(block=False)
@@ -164,23 +189,22 @@ class _BrokenBarrier(_DistributedOptimizer):
                 self._logger.info("Event queue is empty.")
                 continue
             if handle is not None and poll(handle):
+                s = time.time()
                 output = synchronize(handle)
                 # p.grad.set_(self._compression.decompress(output, ctx["compress"]))
-                self._on_grad_ready(p, ctx)
                 self._apply_gradient(p, ctx, output)
-                latest_step = max(ctx["step"], latest_step)
+                self.apply_time += time.time() - s
+                self._on_grad_ready(p, ctx)
+                self._last_synced[p] = max(ctx["step"], self._last_synced[p])
                 self._logger.debug("{}.{} Synced {}".format(self._get_parameter_name(p), ctx["version"],handle))
             else:
                 self.log_if_fc(p, "Can't sync {}".format(handle))
                 q.put((handle, ctx))
-        return latest_step
 
     def _synchronize_all(self):
         for param_group in self.param_groups:
-            for p in reversed(param_group['params']):
+            for p in param_group['params']:
                 self._synchronize_param(p)
-
-
 
     def _apply_gradient(self, p, ctx, output):
         version = ctx["version"]
@@ -194,14 +218,17 @@ class _BrokenBarrier(_DistributedOptimizer):
         else:
             raise ValueError("Invalid optimizer! Only support SGD.")
         buffer.zero_()
+        self._sync_state[p][version] = None
         self._put_version(p, version)
 
     def _on_grad_ready(self, p, ctx):
-        if self._barrier_constraint["step"] == ctx["step"] and not self._barrier_broken:
-            self._update_barrier_constraint_synced(ctx)
-            self._barrier_broken = True if self._l2_barrier_cond_ratio == 0.0 else self._barrier_constraint_satisfied()
+        if not self._barrier_broken and self._needs_barrier and self._barrier_constraint["step"] == ctx["step"]:
+            self._update_barrier_constraint_synced(self._ctxs[p][0])
+            self._barrier_broken = self._barrier_constraint_satisfied()
+            # if hvd.rank() == 0 and self._barrier_broken:
+            #     print("Broken at ", self._get_parameter_name(p))
+            #     print("Constr", self._barrier_constraint["synced_value"] / self._barrier_constraint["target_value"])
             self.log_if_fc(p, "Barrier broken: ".format(self._barrier_broken))
-
 
     def _synchronize(self):
         """Push pull missing parameters"""
@@ -215,20 +242,39 @@ class _BrokenBarrier(_DistributedOptimizer):
             if self._sync_state[p][self._current_version[p]] is None:
                 self._logger.info("{} is not in sync".format(self._get_parameter_name(p)))
                 self._allreduce_grad_async(p)
+        # if self._needs_barrier:
+        #     for param_group in self.param_groups:
+        #             for p in param_group['params']:
+        #                 ctx = self._ctxs[p][0]
+        #                 # if "l2_norm0_cpu" not in ctx:
+        #                 #     ctx["l2_norm_cpu"] = ctx["l2_norm"].item()
+        #                 # self._barrier_constraint["target_value"].add_(ctx["l2_norm_cpu"])
+        #                 # self._barrier_constraint["target_value"].add_(ctx["size"])
+        if self._l2_barrier_cond_ratio < 1.0:
+            self._synchronize_all()
 
-        # self._synchronize_all()
+        # print("Step sync", self._barrier_constraint["synced_value"] / self._barrier_constraint["target_value"])
+        # while not self._barrier_broken:
+        #     for param_group in self.param_groups:
+        #         for p in reversed(param_group['params']):
+        #             self._synchronize_param(p)
+        #             if self._barrier_broken:
+        #                 return
 
     def _get_version(self, p):
+        if self._l2_barrier_cond_ratio == 1.0:
+            return 0
         while True:
             try:
                 v = self._counters[p].get(block=False)
                 return v
             except queue.Empty:
                 self._logger.debug("{} Counter queue is empty for {}.".format(self._desc, self._get_parameter_name(p)))
-                self._synchronize_param(p)
+                self._synchronize_all()
 
     def _put_version(self, p, v):
-        self._counters[p].put(v)
+        if self._l2_barrier_cond_ratio < 1.0:
+            self._counters[p].put(v)
 
     def _init_buffers(self, p, tensor):
         buffers = self._buffers[p]
@@ -242,27 +288,35 @@ class _BrokenBarrier(_DistributedOptimizer):
         return self._buffers[p][v]
 
     def _reset_barrier_constraint(self):
-        if self._barrier_constraint["step"] != self._step:
+        if self._l2_barrier_cond_ratio > 0.0:
+            self._barrier_broken = False
+        if self._needs_barrier:
             self._barrier_constraint["step"] = self._step
             self._barrier_constraint["synced_value"].zero_()
-            self._barrier_constraint["target_value"].zero_()
-            self._barrier_broken = False
+            # self._barrier_constraint["target_value"].zero_()
 
     def _update_barrier_constraint_target(self, tensor, ctx):
-        if self._l2_barrier_cond_ratio == 0.0:
-            l2_norm = 0.0
-        else:
-            l2_norm = torch.norm(tensor.view(-1), p=2)
-            self._barrier_constraint["target_value"].add_(l2_norm)
-        ctx["l2_norm"] = l2_norm
+        if self._needs_barrier:
+            if ctx["version"] == 0:
+                # if "l2_norm" not in ctx:
+                #     ctx["l2_norm"] = torch.tensor([0.0], device=tensor.device)
+                t = time.time()
+                # torch.norm(tensor, p=2, out=ctx["l2_norm"])
+                # ctx.pop("l2_norm_cpu", None)
+                # self._barrier_constraint["target_value"].add_(ctx["l2_norm"])
+                if "size" not in ctx:
+                    ctx["size"] = tensor.numel()
+                    self._barrier_constraint["target_value"].add_(ctx["size"])
+                self.norm_time += time.time() - t
 
     def _update_barrier_constraint_synced(self, ctx):
-        if self._l2_barrier_cond_ratio >= 0.0:
-            self._barrier_constraint["synced_value"].add_(ctx["l2_norm"])
+        if self._needs_barrier:
+            # self._barrier_constraint["synced_value"].add_(ctx["l2_norm_cpu"])
+            self._barrier_constraint["synced_value"].add_(ctx["size"])
 
     def _barrier_constraint_satisfied(self):
         # We check if updates of the previous step synchronization reached a threshold
-        return self._barrier_constraint["synced_value"] >= self._l2_barrier_cond_ratio * self._barrier_constraint["target_value"]
+        return self._barrier_constraint["synced_value"] >= self._barrier_constraint["target_value"] * self._l2_barrier_cond_ratio
 
     def _allreduce_grad_async(self, p):
         """Call hvd API to allreduce gradient asynchronously
@@ -284,15 +338,15 @@ class _BrokenBarrier(_DistributedOptimizer):
         # self._init_buffers(p, p.grad.data)
         b = self._get_buffer(p, v)
         handle = allreduce_async_(b, op=Average, name="{}.{}".format(name, v))
-        ctx = {}
+        ctx = self._ctxs[p][v]
         # ctx["compress"] = compression_ctx
         ctx["version"] = v
         ctx["step"] = self._step
-        self._update_barrier_constraint_target(tensor, ctx)
+        self._update_barrier_constraint_target(tensor.data, ctx)
         self._sync_state[p][v] = True
         # Add to queue to poll completion
         self._event_queues[p].put((handle, ctx))
-        self.norm_time += time.time() - s
+        self.async_call_time += time.time() - s
 
     def log_if_fc(self, p, msg):
         l = '{} '.format(self._get_parameter_name(p))
@@ -318,21 +372,27 @@ class _BrokenBarrier(_DistributedOptimizer):
         def pre_forward_hook(mod, input):
             waited_params = set(mod.parameters())
             prev_step = self._step - 1
+            s = time.time()
             while not self._barrier_broken:
                 # check if there are updates and apply them.
                 synced_params = set()
                 for p in waited_params:
-                    latest_updated = self._synchronize_param(p)
-                    # latest updated is prev step or already synced(queue is empty).
-                    if latest_updated == prev_step or latest_updated == -1:
+                    self._synchronize_param(p)
+                    # latest updated is prev step or already synced.
+                    if self._last_synced[p] == prev_step:
                         synced_params.add(p)
+                # n = "Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)"
+                # if n == str(mod):
+                #     print("Synced:", self._barrier_constraint["synced_value"] / self._barrier_constraint["target_value"])
                 waited_params.difference_update(synced_params)
                 if len(waited_params) == 0:
                     break
-                self._synchronize_all()
-                if self._l2_barrier_cond_ratio == 0.0:
-                    self._barrier_broken = True
-
+                if self._l2_barrier_cond_ratio < 1.0:
+                    self._synchronize_all()
+            # self.preforward_time += time.time() - s
+            # if mod not in self._preforward_times:
+            #     self._preforward_times[mod] = 0
+            # self._preforward_times[mod] += time.time() - s
             self._logger.debug("{} Starts forward {}.".format(self._desc, mod))
 
         def after_forward_hook(mod, input, result):

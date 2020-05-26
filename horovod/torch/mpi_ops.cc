@@ -15,6 +15,7 @@
 // =============================================================================
 
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -58,7 +59,6 @@ int DoAllreduce(T* tensor, T* output, int divisor, char* name, int reduce_op_int
   auto hvd_context =
       std::make_shared<TorchOpContext<DT, Dev, T>>(device, output);
   auto hvd_output = std::make_shared<TorchTensor<DT, Dev, T>>(output);
-
   ReduceOp reduce_op = static_cast<ReduceOp>(reduce_op_int);
   auto start_time = clock_::now();
   auto& time_pair = times[name];

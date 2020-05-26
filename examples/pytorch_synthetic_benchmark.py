@@ -5,11 +5,12 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data.distributed
-from torchvision import models
+from torchvision import models, datasets, transforms
 import horovod.torch as hvd
 import timeit
 import numpy as np
 import time
+import os
 
 # Benchmark settings
 parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
@@ -39,6 +40,8 @@ parser.add_argument('--num-parallel-steps', type=int, default=5,
                     help='number of sgd steps done in parallel')
 parser.add_argument('--bb-l2-ratio', type=float, default=-1.0,
                     help='Ratio of l2 norm to collect to break the barrier')
+parser.add_argument('--dataset-dir', default=os.path.expanduser('~/Datasets/imagenet/'),
+                    help='path to data')
 
 
 args = parser.parse_args()
@@ -46,9 +49,10 @@ args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 if args.bb_l2_ratio < 0.0:
     import horovod.torch as hvd
+elif args.bb_l2_ratio > 1.0:
+    import horovod.torch.cross_barrier as hvd
 else:
     import horovod.torch.broken_barrier_new as hvd
-
 
 hvd.init()
 
@@ -79,13 +83,17 @@ compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.n
 # Horovod: wrap optimizer with DistributedOptimizer.
 if args.bb_l2_ratio < 0.0:
     optimizer = hvd.DistributedOptimizer(optimizer,
-                                     named_parameters=model.named_parameters(),
-                                     compression=compression,
-                                     op=hvd.Adasum if args.use_adasum else hvd.Average)
+                                         named_parameters=model.named_parameters(),
+                                         compression=compression,
+                                         op=hvd.Adasum if args.use_adasum else hvd.Average)
+elif args.bb_l2_ratio > 1.0:
+    optimizer = hvd.CrossBarrier(model, optimizer, named_parameters=model.named_parameters(),
+                                 num_steps=args.num_warmup_batches + args.num_batches_per_iter * args.num_iters)
 else:
     optimizer = hvd.BrokenBarrier(model,
-        optimizer, named_parameters=model.named_parameters(), num_steps=args.num_warmup_batches + args.num_batches_per_iter * args.num_iters,
-        l2_barrier_cond_ratio=args.bb_l2_ratio, num_parallel_steps=args.num_parallel_steps)
+                                  optimizer, named_parameters=model.named_parameters(),
+                                  num_steps=args.num_warmup_batches + args.num_batches_per_iter * args.num_iters,
+                                  l2_barrier_cond_ratio=args.bb_l2_ratio, num_parallel_steps=args.num_parallel_steps)
 
 # Horovod: broadcast parameters & optimizer state.
 hvd.broadcast_parameters(model.state_dict(), root_rank=0)
@@ -97,14 +105,58 @@ target = torch.LongTensor(args.batch_size).random_() % 1000
 if args.cuda:
     data, target = data.cuda(), target.cuda()
 
+# kwargs = {'num_workers': 4, 'pin_memory': True} if args.cuda else {}
+# train_dataset = \
+#     datasets.ImageFolder(os.path.join(args.dataset_dir, "train"),
+#                          transform=transforms.Compose([
+#                              transforms.RandomResizedCrop(224),
+#                              transforms.RandomHorizontalFlip(),
+#                              transforms.ToTensor(),
+#                              transforms.Normalize(mean=[0.485, 0.456, 0.406],
+#                                                   std=[0.229, 0.224, 0.225])
+#                          ]))
+# Horovod: use DistributedSampler to partition data among workers. Manually specify
+# `num_replicas=hvd.size()` and `rank=hvd.rank()`.
+# train_sampler = torch.utils.data.distributed.DistributedSampler(
+#     train_dataset, num_replicas=hvd.size(), rank=hvd.rank())
+# train_loader = torch.utils.data.DataLoader(
+#     train_dataset, batch_size=args.batch_size,
+#     sampler=train_sampler, **kwargs)
+# train_it = iter(train_loader)
+
 
 time_forward = 0
 time_backward = 0
 time_sync = 0
 time_zero = 0
+time_data = 0
+
+# datas = []
+#
+# for i in range(max(args.num_warmup_batches, args.num_batches_per_iter)):
+#     try:
+#         data, target = next(train_it)
+#     except StopIteration:
+#         train_it = iter(train_loader)
+#         data, target = next(train_it)
+#     if args.cuda:
+#         data, target = data.cuda(), target.cuda()
+#     datas.append((data, target))
+#
+# c = 0
 def benchmark_step():
-    global time_forward, time_backward, time_sync, time_zero
+    global time_forward, time_backward, time_sync, time_zero, time_data
+    global train_it
     # torch.cuda.synchronize()
+    # s = time.time()
+    # try:
+    #     data, target = next(train_it)
+    # except StopIteration:
+    #     train_it = iter(train_loader)
+    #     data, target = next(train_it)
+    # if args.cuda:
+    #     data, target = data.cuda(), target.cuda()
+    # time_data += time.time() - s
     s = time.time()
     # zero grad must be called before backward!!!
     optimizer.zero_grad()
@@ -120,6 +172,7 @@ def benchmark_step():
     optimizer.step()
     time_sync += time.time() - s
 
+
 def log(s, nl=True):
     if hvd.rank() != 0:
         return
@@ -134,12 +187,14 @@ log('Number of %ss: %d' % (device, hvd.size()))
 # Warm-up
 log('Running warmup...')
 total_time = timeit.timeit(benchmark_step, number=args.num_warmup_batches)
+c = 0
 
 # Benchmark
 log('Running benchmark...')
 img_secs = []
 for x in range(args.num_iters):
     step_time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
+    c = 0
     total_time += step_time
     img_sec = args.batch_size * args.num_batches_per_iter / step_time
     log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
@@ -149,7 +204,12 @@ for x in range(args.num_iters):
 img_sec_mean = np.mean(img_secs)
 img_sec_conf = 1.96 * np.std(img_secs)
 log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
-log("Total time: {}, forward time: {}, backward time {}, sync time {}, norm time {}. time_zero {}".format(total_time, time_forward, time_backward, time_sync, getattr(optimizer, 'norm_time', 0.0), time_zero))
+log('Total img/sec on %d %s(s): %.1f +-%.1f' %
+    (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
+log("Total time: {}, data time: {}, forward time: {}, preforward time: {}, backward time: {}, sync time: {}, norm time: {}, apply time: {}, async_call_time: {}, zero time: {}".format(
+    total_time, time_data, time_forward, getattr(optimizer, "preforward_time", 0), time_backward, time_sync, getattr(optimizer, 'norm_time', 0.0), getattr(optimizer, 'apply_time', 0.0), getattr(optimizer, 'async_call_time', 0.0), time_zero))
+# if hvd.rank() == 0 and "print_preforward" in dir(optimizer):
+#     optimizer.print_preforward()
 
-if hvd.rank() == 0:
-    hvd.print_times()
+# if hvd.rank() == 0:
+#     hvd.print_times()

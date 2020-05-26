@@ -113,7 +113,6 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   gpu_op_context_.InitGPU(entries);
   nccl_op_context_.InitNCCLComm(entries, response.devices());
   gpu_op_context_.InitGPUQueue(entries, response);
-
   const void* fused_input_data;
   void* buffer_data;
   size_t buffer_len;

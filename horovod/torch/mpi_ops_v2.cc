@@ -35,6 +35,7 @@ namespace torch {
 static HandleManager handle_manager;
 using time_point = std::chrono::time_point<clock_>;
 static std::unordered_map<std::string, std::pair<time_point, double>> times;
+static std::unordered_map<std::string, double> delays;
 
 namespace {
 
@@ -55,6 +56,20 @@ int GetDeviceID(const ::torch::Tensor& tensor) {
 
 } // namespace
 
+void ReadDelays(){
+  const char* file_name = std::getenv("HOROVOD_DELAYS_FILE");
+  if (file_name == nullptr)
+    return;
+  std::ifstream infile(file_name, std::ios::in);
+  if (infile.good()) {
+    std::string name;
+    double delay;
+    while (infile >> name >> delay) {
+      delays[name] = delay / 60;
+    }
+  }
+}
+
 int DoAllreduce(::torch::Tensor tensor, ::torch::Tensor output, int divisor,
                 const std::string& name, int reduce_op_int) {
   ThrowIfError(common::CheckInitialized());
@@ -67,6 +82,10 @@ int DoAllreduce(::torch::Tensor tensor, ::torch::Tensor output, int divisor,
   auto hvd_output = std::make_shared<TorchTensor>(output);
 
   ReduceOp reduce_op = static_cast<ReduceOp>(reduce_op_int);
+  if (delays.size() == 0) {
+    ReadDelays();
+  }
+
   auto start_time = clock_::now();
   auto& time_pair = times[name];
   time_pair.first = start_time;
@@ -77,6 +96,16 @@ int DoAllreduce(::torch::Tensor tensor, ::torch::Tensor output, int divisor,
         // Will execute in the `device` context.
         if (divisor > 1) {
           output.div_(divisor);
+        }
+        auto delay_it = delays.find(name);
+        if (delay_it == delays.end() && delays.size() > 0) {
+          delay_it = delays.find(name.substr(0, name.size() - 2));
+        }
+        if (delay_it != delays.end()) {
+          auto delay = delay_it->second;
+          while (time_since(time_pair.first) < delay) {
+            std::this_thread::sleep_for(std::chrono::nanoseconds(100));
+          }
         }
         handle_manager.MarkDone(handle, status);
         time_pair.second += time_since(time_pair.first);
