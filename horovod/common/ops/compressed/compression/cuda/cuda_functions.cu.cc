@@ -164,8 +164,8 @@ __global__ void L2Norm_find_meta(const float* x, unsigned char* meta, int n,
     if (fabsf(bnorm) < EPS)
       bnorm += EPS;
     norm[i] = bnorm;
-    bmax /= bnorm;
-    max_logs[i] = (unsigned char)(floor(-log2(bmax)));
+//    bmax /= bnorm;
+    max_logs[i] = 0; //(unsigned char)(floor(-log2(bmax)));
   }
 }
 
@@ -735,6 +735,25 @@ void CUDA_dequantize_LinfNorm(unsigned char* input_data,
   CUDA_CHECK(cudaGetLastError());
 }
 
+//void CUDA_quantize_L2Norm(unsigned char* input_data, unsigned char* output_data,
+//                          unsigned char* feedback, float* levels, int num_elems,
+//                          int bits, int bucket_size, CurandState* states,
+//                          cudaStream_t stream) {
+//  float* input = (float*)input_data;
+//  unsigned char* meta_info = output_data;
+//  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
+//  unsigned char* output =
+//      output_data + (sizeof(float) + sizeof(char)) * num_buckets;
+//  L2Norm_find_meta<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
+//                     stream>>>(input, meta_info, num_elems, bucket_size);
+//  CUDA_CHECK(cudaGetLastError());
+//  PackArrayL2Norm<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
+//                    stream>>>(input, meta_info, output, (float*)feedback,
+//                              num_elems, bucket_size, bits, (void*)levels,
+//                              states);
+//  CUDA_CHECK(cudaGetLastError());
+//}
+
 void CUDA_quantize_L2Norm(unsigned char* input_data, unsigned char* output_data,
                           unsigned char* feedback, float* levels, int num_elems,
                           int bits, int bucket_size, CurandState* states,
@@ -745,12 +764,12 @@ void CUDA_quantize_L2Norm(unsigned char* input_data, unsigned char* output_data,
   unsigned char* output =
       output_data + (sizeof(float) + sizeof(char)) * num_buckets;
   L2Norm_find_meta<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
-                     stream>>>(input, meta_info, num_elems, bucket_size);
+      stream>>>(input, meta_info, num_elems, bucket_size);
   CUDA_CHECK(cudaGetLastError());
-  PackArrayL2Norm<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
-                    stream>>>(input, meta_info, output, (float*)feedback,
-                              num_elems, bucket_size, bits, (void*)levels,
-                              states);
+  PackArrayLinfNorm<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
+      stream>>>(input, meta_info, output, (float*)feedback,
+          num_elems, bucket_size, bits, (void*)levels,
+          states);
   CUDA_CHECK(cudaGetLastError());
 }
 

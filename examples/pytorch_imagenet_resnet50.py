@@ -13,6 +13,8 @@ import math
 from tqdm import tqdm
 from distutils.version import LooseVersion
 import time
+from aqsgd.qlevels import LevelsEst
+
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Example',
@@ -49,6 +51,9 @@ parser.add_argument('--momentum', type=float, default=0.9,
                     help='SGD momentum')
 parser.add_argument('--wd', type=float, default=0.00005,
                     help='weight decay')
+
+parser.add_argument('--quantization-bits', type=int, default=4,
+                    help='number of sgd steps done in parallel')
 
 parser.add_argument('--benchmark-mode', action='store_true', default=False,
                     help='turns on benchmark mode')
@@ -163,6 +168,8 @@ optimizer = hvd.DistributedOptimizer(
     backward_passes_per_step=args.batches_per_allreduce,
     op=hvd.Adasum if args.use_adasum else hvd.Average)
 
+nuq_level_est = LevelsEst(model, train_loader, args)
+
 # Restore from a previous checkpoint, if initial_epoch is specified.
 # Horovod: restore on the first worker which will broadcast weights to other workers.
 if resume_from_epoch > 0 and hvd.rank() == 0:
@@ -186,7 +193,7 @@ def train(epoch):
               disable=not verbose) as t:
         for batch_idx, (data, target) in enumerate(train_loader):
             adjust_learning_rate(epoch, batch_idx)
-
+            nuq_level_est.update_levels(epoch, batch_idx)
             if args.cuda:
                 data, target = data.cuda(), target.cuda()
             optimizer.zero_grad()
@@ -244,7 +251,8 @@ def validate(epoch):
 def adjust_learning_rate(epoch, batch_idx):
     if epoch < args.warmup_epochs:
         epoch += float(batch_idx + 1) / len(train_loader)
-        lr_adj = 1. / hvd.size() * (epoch * (hvd.size() - 1) / args.warmup_epochs + 1)
+        # lr_adj = 1. / hvd.size() * (epoch * (hvd.size() - 1) / args.warmup_epochs + 1)
+        lr_adj = 1.
     elif epoch < 30:
         lr_adj = 1.
     elif epoch < 60:
@@ -254,7 +262,8 @@ def adjust_learning_rate(epoch, batch_idx):
     else:
         lr_adj = 1e-3
     for param_group in optimizer.param_groups:
-        param_group['lr'] = args.base_lr * hvd.size() * args.batches_per_allreduce * lr_adj
+        # param_group['lr'] = args.base_lr * hvd.size() * args.batches_per_allreduce * lr_adj
+        param_group['lr'] = args.base_lr * args.batches_per_allreduce * lr_adj
 
 
 def accuracy(output, target):

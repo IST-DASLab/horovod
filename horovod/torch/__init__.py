@@ -48,6 +48,7 @@ from horovod.torch.mpi_ops import gloo_enabled, gloo_built
 from horovod.torch.mpi_ops import nccl_built, ddl_built, ccl_built
 from horovod.torch.mpi_ops import allreduce_time, communication_time, compression_time, meta_info_time
 from horovod.torch.mpi_ops import Average, Sum, Adasum
+from horovod.torch.mpi_ops import set_quantization_levels
 
 import torch
 import collections

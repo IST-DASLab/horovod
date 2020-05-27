@@ -114,6 +114,8 @@ double horovod_communication_time();
 // C interface to return value of the meta info calculation time.
 double horovod_meta_info_time();
 
+void horovod_set_quantization_levels(float *levels);
+
 }
 
 Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,

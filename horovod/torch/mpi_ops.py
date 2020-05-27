@@ -62,6 +62,7 @@ allreduce_time = _basics.allreduce_time
 communication_time = _basics.communication_time
 compression_time = _basics.compression_time
 meta_info_time = _basics.meta_info_time
+set_quantization_levels = _basics.set_quantization_levels
 
 # import reduction op values
 Average = _basics.Average

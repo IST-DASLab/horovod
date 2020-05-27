@@ -29,7 +29,7 @@ class HorovodBasics(object):
         self.MPI_LIB_CTYPES.horovod_communication_time.restype = ctypes.c_double
         self.MPI_LIB_CTYPES.horovod_compression_time.restype = ctypes.c_double
         self.MPI_LIB_CTYPES.horovod_meta_info_time.restype = ctypes.c_double
-        self.MPI_LIB_CTYPES.set_quantization_levels.argtypes = ctypes.POINTER(ctypes.c_double)
+        self.MPI_LIB_CTYPES.horovod_set_quantization_levels.argtypes = [ctypes.POINTER(ctypes.c_double)]
 
         self.Average = self.MPI_LIB_CTYPES.horovod_reduce_op_average()
         self.Sum = self.MPI_LIB_CTYPES.horovod_reduce_op_sum()

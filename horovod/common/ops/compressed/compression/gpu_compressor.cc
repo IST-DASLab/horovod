@@ -159,6 +159,9 @@ Status GPUNormalizedQuantizer::Init(
 
 void GPUNormalizedQuantizer::SetQuantizationLevels(float* levels) {
   int num_levels = 1 << (bits_ - 1);
+  if (levels_ == nullptr) {
+      cudaMalloc((void**)&levels_, sizeof(float) * num_levels);
+  }
   cudaMemcpy((void*)levels_, (void*)levels,
              sizeof(float) * num_levels,
              cudaMemcpyHostToDevice);
