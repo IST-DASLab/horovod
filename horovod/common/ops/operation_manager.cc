@@ -106,12 +106,12 @@ OperationManager::ExecuteOperation(std::vector<TensorTableEntry>& entries,
 }
 
 bool OperationManager::Packed(const std::string& name1, const std::string& name2) {
-//  return true;
-    for (auto& op : allreduce_ops_) {
-        if (op->EnabledName(name1) ^ op->EnabledName(name2))
-          return false;
-    }
   return true;
+//    for (auto& op : allreduce_ops_) {
+//        if (op->EnabledName(name1) ^ op->EnabledName(name2))
+//          return false;
+//    }
+//  return true;
 }
 
 } // namespace common
