@@ -104,7 +104,6 @@ except ImportError:
 
 # Horovod: limit # of CPU threads to be used per worker.
 torch.set_num_threads(4)
-
 kwargs = {'num_workers': 4, 'pin_memory': True} if args.cuda else {}
 train_dataset = \
     datasets.ImageFolder(args.train_dir,
@@ -144,7 +143,6 @@ model = models.resnet18()
 # By default, Adasum doesn't need scaling up learning rate.
 # For sum/average with gradient Accumulation: scale learning rate by batches_per_allreduce
 lr_scaler = args.batches_per_allreduce * hvd.size() if not args.use_adasum else 1
-
 if args.cuda:
     # Move model to GPU.
     model.cuda()

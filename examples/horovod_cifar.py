@@ -235,7 +235,7 @@ def train(epoch):
               desc='Train Epoch     #{}'.format(epoch + 1)) as t:
         for batch_idx, (data, target) in enumerate(train_loader):
             adjust_learning_rate(epoch, batch_idx)
-            nuq_level_est.update_levels(epoch, batch_idx)
+            # nuq_level_est.update_levels(epoch, batch_idx)
             if args.cuda:
                 data, target = data.cuda(), target.cuda()
             optimizer.zero_grad()
