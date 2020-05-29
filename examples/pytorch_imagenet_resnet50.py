@@ -56,6 +56,8 @@ parser.add_argument('--model', type=str, default='resnet50',
                     help='model to benchmark')
 parser.add_argument('--quantization-bits', type=int, default=4,
                     help='number of sgd steps done in parallel')
+parser.add_argument('--enable-aqsgd', type=int, default=0,
+                    help='enable/disable aqsgd')
 
 parser.add_argument('--benchmark-mode', action='store_true', default=False,
                     help='turns on benchmark mode')
@@ -194,7 +196,8 @@ def train(epoch):
               disable=not verbose) as t:
         for batch_idx, (data, target) in enumerate(train_loader):
             adjust_learning_rate(epoch, batch_idx)
-            # nuq_level_est.update_levels(epoch, batch_idx)
+            if args.enable_aqsgd:
+                nuq_level_est.update_levels(epoch, batch_idx)
             if args.cuda:
                 data, target = data.cuda(), target.cuda()
             optimizer.zero_grad()

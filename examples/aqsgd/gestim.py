@@ -94,6 +94,8 @@ class GradientEstimator(object):
             end = min((bucket + 1) * bs, len(grad))
             current_bk = grad[start:end]
             norm = current_bk.norm()
+            if norm.item() < 1e-6:
+                continue
             current_bk = current_bk / norm
             b_len = len(current_bk)
             if b_len != bs and ig_sm_bkts:
@@ -153,6 +155,7 @@ class GradientEstimator(object):
         stats_nb['norms'] = torch.stack(stats_nb['norms']).cpu().tolist()
 
         if len(stats_nb['means']) > self.opt.dist_num:
+            # indexes = np.argsort(-np.asarray(stats_nb['norms']))[:self.opt.dist_num]
             indexes = np.random.choice(len(stats_nb['norms']), self.opt.dist_num)
             stats_nb['means'] = np.array(stats_nb['means'])[indexes].tolist()
             stats_nb['sigmas'] = np.array(stats_nb['sigmas'])[

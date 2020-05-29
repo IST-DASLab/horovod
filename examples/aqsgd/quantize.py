@@ -212,6 +212,10 @@ def alq(initial_levels, grad_dist, epochs, inv=False, sym=True, lr=0.1):
                 new_levels[index] = finite_diff_gradient_descent(
                     lambda x: objective(x, left_level, right_level),
                     left_level, right_level, x0=new_levels[index], lr=lr)
+            if not (new_levels[index] < right_level and new_levels[index] > left_level):
+                print("Means ", grad_dist.means)
+                print("Sigmas ", grad_dist.sigmas)
+                print("Norms ", grad_dist.norms)
             assert new_levels[index] < right_level and \
                    new_levels[index] > left_level, \
                 "New level is not in the interval"
@@ -406,7 +410,7 @@ class QuantizeMultiBucket(object):
         levels = self.levels[num_levels:]
         levels[0] = 0.0
         levels_np = levels.numpy()
-        levels_np = levels_np[::-1]
+        levels_np = list(levels_np[::-1])
         return torch.as_tensor(levels_np, dtype=torch.float32, device='cpu')
 
     def state_dict(self):
