@@ -52,6 +52,8 @@ parser.add_argument('--momentum', type=float, default=0.9,
 parser.add_argument('--wd', type=float, default=0.00005,
                     help='weight decay')
 
+parser.add_argument('--model', type=str, default='resnet50',
+                    help='model to benchmark')
 parser.add_argument('--quantization-bits', type=int, default=4,
                     help='number of sgd steps done in parallel')
 
@@ -138,7 +140,8 @@ val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.val_batch_
 
 
 # Set up standard ResNet-50 model.
-model = models.resnet18()
+model = getattr(models, args.model)()
+
 
 # By default, Adasum doesn't need scaling up learning rate.
 # For sum/average with gradient Accumulation: scale learning rate by batches_per_allreduce

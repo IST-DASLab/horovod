@@ -972,5 +972,9 @@ Status EnqueueJoin(std::shared_ptr<OpContext> context,
   return status;
 }
 
+bool tensors_Packed(const std::string& name1,const std::string& name2) {
+  return op_manager->Packed(name1, name2);
+}
+
 } // namespace common
 } // namespace horovod

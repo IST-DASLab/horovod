@@ -39,8 +39,8 @@ class LevelsEst:
         self.model = model
         self.opt = {
             "nuq_number_of_samples": 10,
-            "nuq_ig_sm_bkts":False,
-            "nuq_bucket_size": 512,
+            "nuq_ig_sm_bkts": False,
+            "nuq_bucket_size": 8192,
             "workers": 4,
             "cuda": True,
             "g_batch_size": args.batch_size,

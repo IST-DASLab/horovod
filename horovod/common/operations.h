@@ -144,6 +144,8 @@ Status EnqueueJoin(std::shared_ptr<OpContext> context,
                               const std::string name, const int device,
                               StatusCallback callback);
 
+bool tensors_Packed(const std::string& name1,const std::string& name2);
+
 } // namespace common
 } // namespace horovod
 

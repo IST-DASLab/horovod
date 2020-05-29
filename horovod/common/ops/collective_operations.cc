@@ -80,6 +80,9 @@ void AllreduceOp::MemcpyEntryOutFusionBuffer(
               (size_t)e.output->size());
 }
 
+bool AllreduceOp::EnabledName(const std::string& name) const {
+  return true;
+}
 // Allgather
 AllgatherOp::AllgatherOp(HorovodGlobalState* global_state)
     : HorovodOp(global_state) {}

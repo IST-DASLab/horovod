@@ -108,6 +108,10 @@ bool MPI_GPUCompressedAllReduce::Enabled(
   return GPUAllreduce::Enabled(param_manager, entries, response);
 }
 
+bool MPI_GPUCompressedAllReduce::EnabledName(const std::string& name) const {
+  return name.find("bias") == std::string::npos;
+}
+
 void SetQuantizationLevels(float* levels) {
   global_compressor->SetQuantizationLevels(levels);
 }

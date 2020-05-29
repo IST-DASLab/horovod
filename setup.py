@@ -802,7 +802,6 @@ def get_common_options(build_ext):
             MACROS += [('GRAD_COMPRESSION', '1')]
             SOURCES += ['horovod/common/ops/compressed/compression/cuda/cuda_functions.cu.cc',
                         'horovod/common/ops/compressed/mpi_gpu_compressed_operations.cc',
-                        'horovod/common/ops/compressed/nccl_compressed_operations.cc',
                         'horovod/common/ops/compressed/mpi_compressed_operations.cc',
                         'horovod/common/ops/compressed/reducers/all_broadcast.cc',
                         'horovod/common/ops/compressed/reducers/scatter_allgather.cc',
@@ -853,7 +852,9 @@ def get_common_options(build_ext):
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
         INCLUDES += nccl_include_dirs
-        SOURCES += ['horovod/common/ops/nccl_operations.cc']
+        SOURCES += ['horovod/common/ops/nccl_operations.cc',
+                    'horovod/common/ops/compressed/nccl_compressed_operations.cc',
+                    ]
         if have_mpi:
             SOURCES += ['horovod/common/ops/adasum_gpu_operations.cc']
         LIBRARY_DIRS += nccl_lib_dirs

@@ -49,6 +49,7 @@ public:
 
   Status ExecuteOperation(std::vector<TensorTableEntry>& entries, const Response& response) const;
 
+  bool Packed(const std::string& name1, const std::string& name2);
 private:
   ParameterManager* param_manager_;
 
