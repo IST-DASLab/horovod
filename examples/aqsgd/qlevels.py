@@ -40,11 +40,11 @@ class LevelsEst:
         self.opt = {
             "nuq_number_of_samples": 10,
             "nuq_ig_sm_bkts": True,
-            "nuq_bucket_size": 8192,
+            "nuq_bucket_size": args.bucket_size,
             "workers": 4,
             "cuda": True,
             "g_batch_size": args.batch_size,
-            "nuq_method": "alq_nb",
+            "nuq_method": "amq_nb",
             "nuq_learning_rate": 0.7,
             "nuq_truncated_interval": 1,
             "nuq_cd_epochs": 30,
@@ -55,12 +55,13 @@ class LevelsEst:
             'nuq_mul': 0.5,
             "nuq_amq_lr": 0.7,
             "nuq_amq_epochs": 50,
-            "nuq_sym": True,
+            "nuq_sym": False,
             "nuq_inv": False,
             "delay_epoch_start": 10,  # number of steps to wait after lr decaying epoch starts
             "logger_name": None,
-            "dist_num": 20
+            "dist_num": 350
         }
+        print("ALQ opts:", self.opt)
         self.opt = DictWrapper(self.opt)
         self.gest_used = False
         data_loader = get_minvar_loader(train_loader, self.opt)

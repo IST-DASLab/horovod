@@ -58,6 +58,8 @@ parser.add_argument('--quantization-bits', type=int, default=4,
                     help='number of sgd steps done in parallel')
 parser.add_argument('--enable-aqsgd', type=int, default=0,
                     help='enable/disable aqsgd')
+parser.add_argument('--bucket-size', type=int, default=512,
+                    help='compression bucket size')
 
 parser.add_argument('--benchmark-mode', action='store_true', default=False,
                     help='turns on benchmark mode')
@@ -108,7 +110,7 @@ except ImportError:
 
 # Horovod: limit # of CPU threads to be used per worker.
 torch.set_num_threads(4)
-kwargs = {'num_workers': 4, 'pin_memory': True} if args.cuda else {}
+kwargs = {'num_workers': 16, 'pin_memory': True} if args.cuda else {}
 train_dataset = \
     datasets.ImageFolder(args.train_dir,
                          transform=transforms.Compose([
@@ -196,7 +198,7 @@ def train(epoch):
               disable=not verbose) as t:
         for batch_idx, (data, target) in enumerate(train_loader):
             adjust_learning_rate(epoch, batch_idx)
-            if args.enable_aqsgd:
+            if args.enable_aqsgd > 0:
                 nuq_level_est.update_levels(epoch, batch_idx)
             if args.cuda:
                 data, target = data.cuda(), target.cuda()
@@ -301,6 +303,7 @@ class Metric(object):
     def avg(self):
         return self.sum / self.n
 
+print(args)
 start = time.time()
 for epoch in range(resume_from_epoch, args.epochs):
     train(epoch)
