@@ -44,7 +44,7 @@ class LevelsEst:
             "workers": 4,
             "cuda": True,
             "g_batch_size": args.batch_size,
-            "nuq_method": "amq_nb",
+            "nuq_method": "alq",
             "nuq_learning_rate": 0.7,
             "nuq_truncated_interval": 1,
             "nuq_cd_epochs": 30,
@@ -68,7 +68,7 @@ class LevelsEst:
         self.gestim = NUQEstimator(data_loader, self.opt)
 
     def update_levels(self, epoch, batch_idx):
-        if (epoch + 1) in self.opt.update_epochs and batch_idx == self.opt.delay_epoch_start:
+        if (epoch == 0 and ((batch_idx == 50) or(batch_idx == 100))) or (epoch + 1) in self.opt.update_epochs and batch_idx == self.opt.delay_epoch_start:
             opt = self.opt
             model = self.model
             if hvd.rank() == 0:

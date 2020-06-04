@@ -327,7 +327,7 @@ class QuantizeMultiBucket(object):
             inv = self.inv
             sym = self.symmetric
             epochs = self.epochs
-
+            quantile_levels = get_quantile_levels(bits, grad_dist_nl)
             # Try various initializations and pick the best one
             levels_qua, _, losses_qua = alq(
                 quantile_levels, grad_dist_nl, epochs, inv, sym, self.alq_lr)

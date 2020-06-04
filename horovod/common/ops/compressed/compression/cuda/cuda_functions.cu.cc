@@ -160,9 +160,13 @@ __global__ void L2Norm_find_meta(const float* x, unsigned char* meta, int n,
       bnorm += x[j] * x[j];
       bmax = fmaxf(bmax, fabsf(x[j]));
     }
-    bnorm = sqrt(bnorm);
     if (fabsf(bnorm) < EPS)
       bnorm += EPS;
+    if ((i + 1) * bucket_size > n) {
+      // not full bucket. Need to rescale.
+      bnorm *= bucket_size / (n - i * bucket_size);
+    }
+    bnorm = sqrt(bnorm);
     norm[i] = bnorm;
 //    bmax /= bnorm;
     max_logs[i] = 0; //(unsigned char)(floor(-log2(bmax)));

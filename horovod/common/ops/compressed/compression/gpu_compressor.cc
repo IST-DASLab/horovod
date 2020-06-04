@@ -162,6 +162,13 @@ void GPUNormalizedQuantizer::SetQuantizationLevels(float* levels) {
   if (levels_ == nullptr) {
       cudaMalloc((void**)&levels_, sizeof(float) * num_levels);
   }
+  if (global_state_->controller->GetRank() == 0) {
+    std::cout << "Set levels: [";
+    for (int i = 0; i < num_levels; i++){
+      std::cout << " " << levels[i];
+    }
+    std::cout << " ]" << std::endl;
+  }
   cudaMemcpy((void*)levels_, (void*)levels,
              sizeof(float) * num_levels,
              cudaMemcpyHostToDevice);
