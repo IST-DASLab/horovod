@@ -17,8 +17,8 @@ class DictWrapper(object):
 
 
 def convert_to_ctypes(arr):
-    c_double_p = ctypes.POINTER(ctypes.c_double)
-    a = arr.ctypes.data_as(c_double_p)
+    c_float_p = ctypes.POINTER(ctypes.c_float)
+    a = arr.ctypes.data_as(c_float_p)
     return a
 
 
@@ -50,7 +50,7 @@ class LevelsEst:
             "nuq_cd_epochs": 30,
             "nuq_layer": 0,
             "g_estim": 'nuq',
-            "update_epochs": [2, 30, 60, 80],
+            "update_epochs": [30, 60, 80],
             "nuq_bits": args.quantization_bits,
             'nuq_mul': 0.5,
             "nuq_amq_lr": 0.7,
@@ -59,7 +59,7 @@ class LevelsEst:
             "nuq_inv": False,
             "delay_epoch_start": 10,  # number of steps to wait after lr decaying epoch starts
             "logger_name": None,
-            "dist_num": 350
+            "dist_num": 5
         }
         print("ALQ opts:", self.opt)
         self.opt = DictWrapper(self.opt)
@@ -68,7 +68,7 @@ class LevelsEst:
         self.gestim = NUQEstimator(data_loader, self.opt)
 
     def update_levels(self, epoch, batch_idx):
-        if (epoch == 0 and ((batch_idx == 50) or(batch_idx == 100))) or (epoch + 1) in self.opt.update_epochs and batch_idx == self.opt.delay_epoch_start:
+        if (epoch == 0 and ((batch_idx == 1000) or(batch_idx == 2000))) or (epoch + 1) in self.opt.update_epochs and batch_idx == self.opt.delay_epoch_start:
             opt = self.opt
             model = self.model
             if hvd.rank() == 0:
@@ -84,7 +84,6 @@ class LevelsEst:
                 qlevels_t = self.gestim.qdq.get_levels()
                 print(qlevels_t)
             else:
-                time.sleep(30)
                 qlevels_t = torch.tensor([0.0]*(1 << (self.opt.nuq_bits-1)), dtype=torch.float32)
             qlevels_t = hvd.broadcast(qlevels_t, root_rank=0)
             qlevels = qlevels_t.numpy()

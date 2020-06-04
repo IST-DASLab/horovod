@@ -20,6 +20,7 @@ void UnpackBucket(unsigned char* input, float* output, int num_elems, int bits,
                   std::function<float(unsigned char)> decode);
 
 void Compressor::SetQuantizationLevels(float* levels) {
+  std::cout << "I don't set anything" << std::endl;
 }
 
 Compressor::Compressor(HorovodGlobalState* global_state)

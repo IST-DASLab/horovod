@@ -67,7 +67,6 @@ public:
 
   Status Init(GPUContext* gpu_context,
               const std::vector<horovod::common::TensorTableEntry>& entries);
-  void SetQuantizationLevels(float* levels);
 };
 
 class GPUNormLinfQuantizer : public GPUNormalizedQuantizer,
@@ -83,6 +82,7 @@ public:
                   int64_t num_elems) override;
   int64_t BufferSize(int num_elems) final;
   void Finalize() override;
+  void SetQuantizationLevels(float* levels) override ;
 };
 
 class GPUNormL2Quantizer : public GPUNormalizedQuantizer,
@@ -98,6 +98,7 @@ public:
                   int64_t num_elems) override;
   int64_t BufferSize(int num_elems) final;
   void Finalize() override;
+  void SetQuantizationLevels(float* levels) override ;
 };
 
 } // namespace common

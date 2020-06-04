@@ -54,7 +54,7 @@ public:
   virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
   double getMetaInfoTime() const;
   double getCompressionTime() const;
-  void SetQuantizationLevels(float* levels);
+  virtual void SetQuantizationLevels(float* levels) ;
 protected:
   // The size of the bucket.
   int bucket_size_;

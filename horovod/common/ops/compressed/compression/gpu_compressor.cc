@@ -157,7 +157,7 @@ Status GPUNormalizedQuantizer::Init(
   return Status::OK();
 }
 
-void GPUNormalizedQuantizer::SetQuantizationLevels(float* levels) {
+void GPUNormLinfQuantizer::SetQuantizationLevels(float* levels) {
   int num_levels = 1 << (bits_ - 1);
   if (levels_ == nullptr) {
       cudaMalloc((void**)&levels_, sizeof(float) * num_levels);
@@ -236,6 +236,25 @@ GPUNormL2Quantizer::GPUNormL2Quantizer(GPUContext* gpu_context,
     throw std::logic_error(
         "CPUNormL2Quantizer: Multipliers other than 0.5 are not supported yet");
 }
+
+void GPUNormL2Quantizer::SetQuantizationLevels(float* levels) {
+  int num_levels = 1 << (bits_ - 1);
+  if (levels_ == nullptr) {
+    cudaMalloc((void**)&levels_, sizeof(float) * num_levels);
+  }
+  assert(false);
+  if (global_state_->controller->GetRank() == 0) {
+    std::cout << "Set levels: [";
+    for (int i = 0; i < num_levels; i++){
+      std::cout << " " << levels[i];
+    }
+    std::cout << " ]" << std::endl;
+  }
+  cudaMemcpy((void*)levels_, (void*)levels,
+             sizeof(float) * num_levels,
+             cudaMemcpyHostToDevice);
+}
+
 
 int64_t GPUNormL2Quantizer::Compress(unsigned char* input,
                                      unsigned char* output,

@@ -25,6 +25,8 @@ protected:
   MPIReducer *mpiReducer;
 };
 
+void SetQuantizationLevels(float* levels);
+
 } // common
 } // horovod
 #endif // HOROVOD_MPI_GPU_COMPRESSED_OPERATIONS_H
