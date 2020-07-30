@@ -86,6 +86,13 @@ class _HorovodArgs(object):
         self.use_mpi = None
         self.use_jsrun = None
 
+        # compression arguments
+        self.quantization_bits = None
+        self.compression_bucket_size = 512
+        self.reduction_type = 'none'
+        self.compression_type = 'none'
+        self.compression_error_feedback = False
+
 
 def run(
         func,

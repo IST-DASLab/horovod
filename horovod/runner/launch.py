@@ -465,6 +465,32 @@ def parse_args():
                                        'This will be the default if jsrun is installed and Horovod '
                                        'was built with MPI support.')
 
+    group_grad_compression = parser.add_argument_group('compression arguments')
+    group_grad_compression.add_argument('--reduction-type', type=config_parser.ReductionType.from_string,
+                                        choices=list(config_parser.ReductionType),
+                                        action=make_override_action(override_args),
+                                        help='Allreduce algorithm to use in case of compressed communication.')
+    group_grad_compression.add_argument('--compression-type', type=config_parser.CompressionType.from_string,
+                                        action=make_override_action(override_args),
+                                        choices=list(config_parser.CompressionType),
+                                        help='Compression algorithm to use in case of compressed communication ')
+    group_grad_compression.add_argument('--compression-bucket-size', type=int, default=512,
+                                        action=make_override_action(override_args),
+                                        help='Bucket size of gradient to compress')
+    group_grad_compression.add_argument('--compression-norm-type', type=config_parser.NormType.from_string,
+                                        action=make_override_action(override_args),
+                                        choices=list(config_parser.NormType),
+                                        help='Norm type for norm based quantization')
+    group_grad_compression.add_argument('--compression-levels-type', type=config_parser.LevelsType.from_string,
+                                        action=make_override_action(override_args),
+                                        choices=list(config_parser.LevelsType),
+                                        help='Choose levels for norm based quantization (Pos - [0,1], Wide - [-1, 1])')
+    group_grad_compression.add_argument('-q', '--quantization-bits', type=int, default=None,
+                                        action=make_override_action(override_args),
+                                        help='Number of bits quantize to (0-8). 0 means no compression')
+    group_grad_compression.add_argument('--compression-error-feedback', action=make_override_true_action(override_args),
+                                        help='Enable error feedback for gradient compression.')
+
     args = parser.parse_args()
 
     if args.config_file:

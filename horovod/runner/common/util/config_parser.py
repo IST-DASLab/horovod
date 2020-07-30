@@ -51,6 +51,83 @@ HOROVOD_LOG_LEVEL = 'HOROVOD_LOG_LEVEL'
 HOROVOD_LOG_HIDE_TIME = 'HOROVOD_LOG_HIDE_TIME'
 LOG_LEVELS = ['TRACE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'FATAL']
 
+# Compression knobs
+HOROVOD_QUANTIZATION_BITS = "HOROVOD_QUANTIZATION_BITS"
+HOROVOD_COMPRESSION_BUCKET_SIZE = "HOROVOD_COMPRESSION_BUCKET_SIZE"
+HOROVOD_REDUCTION = "HOROVOD_REDUCTION"
+HOROVOD_COMPRESSION = "HOROVOD_COMPRESSION"
+HOROVOD_COMPRESSION_NORM_TYPE = "HOROVOD_COMPRESSION_NORM_TYPE"
+HOROVOD_COMPRESSION_LEVELS_TYPE = "HOROVOD_COMPRESSION_LEVELS_TYPE"
+HOROVOD_COMPRESSION_ERROR_FEEDBACK = "HOROVOD_COMPRESSION_ERROR_FEEDBACK"
+
+
+class ReductionType(Enum):
+    AllBroadcast = 0
+    ScatterAllgather = 1
+    Ring = 2
+    NCCLAllGather = 3
+    NCCL_ScatterAllgather = 4
+    NCCL_Ring = 5
+    none = 6
+
+    def __str__(self):
+        return self.name
+
+    @staticmethod
+    def from_string(s):
+        try:
+            return ReductionType[s]
+        except KeyError:
+            raise ValueError("Wrong Reduction type")
+
+
+class CompressionType(Enum):
+    maxmin = 0
+    uni = 1
+    exp = 2
+    none = 3
+
+    def __str__(self):
+        return self.name
+
+    @staticmethod
+    def from_string(s):
+        try:
+            return CompressionType[s]
+        except KeyError:
+            raise ValueError("Wrong Compression type")
+
+
+class NormType(Enum):
+    L2 = 0
+    Linf = 1
+
+    def __str__(self):
+        return self.name
+
+    @staticmethod
+    def from_string(s):
+        try:
+            return NormType[s]
+        except KeyError:
+            raise ValueError("Wrong Norm type")
+
+
+class LevelsType(Enum):
+    # from 0 to 1
+    Pos = 0
+    # from -1 to 1
+    Wide = 1
+
+    def __str__(self):
+        return self.name
+
+    @staticmethod
+    def from_string(s):
+        try:
+            return LevelsType[s]
+        except KeyError:
+            raise ValueError("Wrong Norm type")
 
 def _set_arg_from_config(args, arg_base_name, override_args, config, arg_prefix=''):
     arg_name = arg_prefix + arg_base_name
@@ -120,6 +197,15 @@ def set_args_from_config(args, config, override_args):
         _set_arg_from_config(args, 'level', override_args, logging, arg_prefix='log_')
         _set_arg_from_config(args, 'hide_timestamp', override_args, logging, arg_prefix='log_')
 
+    compression = config.get('compression')
+    if compression:
+        _set_arg_from_config(args, 'quantization_bits', override_args, compression, arg_prefix='compression_')
+        _set_arg_from_config(args, 'compression_bucket_size', override_args, compression, arg_prefix='compression_')
+        _set_arg_from_config(args, 'compression_error_feedback', override_args, compression, arg_prefix='compression_')
+        _set_arg_from_config(args, 'reduction_type', override_args, compression, arg_prefix='compression_')
+        _set_arg_from_config(args, 'compression_type', override_args, compression, arg_prefix='compression_')
+        _set_arg_from_config(args, 'compression_levels_type', override_args, compression, arg_prefix='compression_')
+        _set_arg_from_config(args, 'compression_norm_type', override_args, compression, arg_prefix='compression_')
 
 def _validate_arg_nonnegative(args, arg_name):
     value = getattr(args, arg_name)
@@ -139,7 +225,10 @@ def validate_config_args(args):
     if noise is not None and (noise < 0 or noise > 1):
         raise ValueError('{}={} must be in [0, 1]'.format('autotune_gaussian_process_noise',
                                                           args.autotune_gaussian_process_noise))
-
+    bits = args.quantization_bits
+    if bits is not None and (bits < 0 or bits > 8) and bits != 32:
+        raise ValueError('{}={} must be in [0, 8] or 32'.format('quantization_bits',
+                                                                args.quantization_bits))
     _validate_arg_nonnegative(args, 'stall_check_warning_time_seconds')
     _validate_arg_nonnegative(args, 'stall_check_shutdown_time_seconds')
     _validate_arg_nonnegative(args, 'num_nccl_streams')
@@ -196,4 +285,11 @@ def set_env_from_args(env, args):
     _add_arg_to_env(env, HOROVOD_LOG_LEVEL, args.log_level)
     _add_arg_to_env(env, HOROVOD_LOG_HIDE_TIME, args.log_hide_timestamp, identity)
 
+    _add_arg_to_env(env, HOROVOD_QUANTIZATION_BITS, args.quantization_bits if args.quantization_bits and args.quantization_bits > 0 else None)
+    _add_arg_to_env(env, HOROVOD_COMPRESSION_BUCKET_SIZE, args.compression_bucket_size)
+    _add_arg_to_env(env, HOROVOD_REDUCTION, args.reduction_type, enum_tf)
+    _add_arg_to_env(env, HOROVOD_COMPRESSION, args.compression_type, enum_tf)
+    _add_arg_to_env(env, HOROVOD_COMPRESSION_LEVELS_TYPE, args.compression_levels_type, enum_tf)
+    _add_arg_to_env(env, HOROVOD_COMPRESSION_NORM_TYPE, args.compression_norm_type, enum_tf)
+    _add_arg_to_env(env, HOROVOD_COMPRESSION_ERROR_FEEDBACK, args.compression_error_feedback, identity)
     return env
