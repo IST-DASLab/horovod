@@ -3,8 +3,8 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data.distributed
+import torch.distributed as dist
 from torchvision import models
-import horovod.torch as hvd
 import timeit
 import numpy as np
 
@@ -31,15 +31,37 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
 
 parser.add_argument('--use-adasum', action='store_true', default=False,
                     help='use adasum algorithm to do reduction')
+parser.add_argument('--local_rank', default=-1, type=int, help="Using apex")
+parser.add_argument('--use-amp', action='store_true', default=False,
+                    help='use mixed precision training')
+parser.add_argument('--use-apex', action='store_true', default=False,
+                    help='use apex')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
-hvd.init()
+if args.local_rank < 0 and not args.use_apex:
+    import horovod.torch as hvd
+    hvd.init()
+    use_apex_dist=False
+else:
+    from apex.parallel import DistributedDataParallel
+    from apex import amp
+    dist.init_process_group(backend='nccl', init_method='env://')
+    use_apex_dist=True
+
+if args.use_amp:
+    from apex import amp
+if use_apex_dist:
+    rank = args.local_rank
+    world_size = dist.get_world_size()
+else:
+    rank = hvd.local_rank()
+    world_size = hvd.size()
 
 if args.cuda:
-    # Horovod: pin GPU to local rank.
-    torch.cuda.set_device(hvd.local_rank())
+    # pin GPU to local rank.
+    torch.cuda.set_device(rank)
 
 cudnn.benchmark = True
 
@@ -47,29 +69,36 @@ cudnn.benchmark = True
 model = getattr(models, args.model)()
 
 # By default, Adasum doesn't need scaling up learning rate.
-lr_scaler = hvd.size() if not args.use_adasum else 1
-
+# lr_scaler = world_size if not args.use_adasum else 1
+#
 if args.cuda:
     # Move model to GPU.
     model.cuda()
     # If using GPU Adasum allreduce, scale learning rate by local_size.
-    if args.use_adasum and hvd.nccl_built():
-        lr_scaler = hvd.local_size()
+    # if args.use_adasum and hvd.nccl_built():
+    #     lr_scaler = hvd.local_size()
 
-optimizer = optim.SGD(model.parameters(), lr=0.01 * lr_scaler)
+optimizer = optim.SGD(model.parameters(), lr=0.01)
 
-# Horovod: (optional) compression algorithm.
-compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
 
 # Horovod: wrap optimizer with DistributedOptimizer.
-optimizer = hvd.DistributedOptimizer(optimizer,
-                                     named_parameters=model.named_parameters(),
-                                     compression=compression,
-                                     op=hvd.Adasum if args.use_adasum else hvd.Average)
+if not use_apex_dist:
+    # Horovod: (optional) compression algorithm.
+    compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+    optimizer = hvd.DistributedOptimizer(optimizer,
+                                         named_parameters=model.named_parameters(),
+                                         compression=compression,
+                                         op=hvd.Adasum if args.use_adasum else hvd.Average)
 
-# Horovod: broadcast parameters & optimizer state.
-hvd.broadcast_parameters(model.state_dict(), root_rank=0)
-hvd.broadcast_optimizer_state(optimizer, root_rank=0)
+    # Horovod: broadcast parameters & optimizer state.
+    hvd.broadcast_parameters(model.state_dict(), root_rank=0)
+    hvd.broadcast_optimizer_state(optimizer, root_rank=0)
+
+if args.use_amp or use_apex_dist:
+    model, optimizer = amp.initialize(model, optimizer, opt_level="O2")
+
+if use_apex_dist:
+    model = DistributedDataParallel(model, num_allreduce_streams=4, fake_comp_ratio=1.0)
 
 # Set up fixed fake data
 data = torch.randn(args.batch_size, 3, 224, 224)
@@ -82,12 +111,24 @@ def benchmark_step():
     optimizer.zero_grad()
     output = model(data)
     loss = F.cross_entropy(output, target)
-    loss.backward()
-    optimizer.step()
+    if use_apex_dist:
+        with amp.scale_loss(loss, optimizer) as scaled_loss:
+            scaled_loss.backward()
+        optimizer.step()
+    else:
+        if args.use_amp:
+            with amp.scale_loss(loss, optimizer) as scaled_loss:
+                scaled_loss.backward()
+                optimizer.synchronize()
+            with optimizer.skip_synchronize():
+                optimizer.step()
+        else:
+            loss.backward()
+            optimizer.step()
 
 
 def log(s, nl=True):
-    if hvd.rank() != 0:
+    if rank != 0:
         return
     print(s, end='\n' if nl else '')
 
@@ -95,7 +136,7 @@ def log(s, nl=True):
 log('Model: %s' % args.model)
 log('Batch size: %d' % args.batch_size)
 device = 'GPU' if args.cuda else 'CPU'
-log('Number of %ss: %d' % (device, hvd.size()))
+log('Number of %ss: %d' % (device, world_size))
 
 # Warm-up
 log('Running warmup...')
@@ -115,4 +156,4 @@ img_sec_mean = np.mean(img_secs)
 img_sec_conf = 1.96 * np.std(img_secs)
 log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
 log('Total img/sec on %d %s(s): %.1f +-%.1f' %
-    (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
+    (world_size, device, world_size * img_sec_mean, world_size * img_sec_conf))
