@@ -116,6 +116,10 @@ void AllreduceOp::ScaleBuffer(
   }
 }
 
+bool AllreduceOp::EnabledName(const std::string& name) const {
+  return true;
+}
+
 // Allgather
 AllgatherOp::AllgatherOp(HorovodGlobalState* global_state)
     : HorovodOp(global_state) {}

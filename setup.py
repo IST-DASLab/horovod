@@ -39,6 +39,45 @@ torch_mpi_lib_v2 = CMakeExtension('horovod.torch.mpi_lib_v2',
 mxnet_mpi_lib = CMakeExtension('horovod.mxnet.mpi_lib',
                                      cmake_lists_dir='.', sources=[])
 
+ccl_root = os.environ.get('CCL_ROOT')
+have_ccl = ccl_root is not None
+
+
+def customize_compiler_for_nvcc(self):
+    """inject deep into distutils to customize how the dispatch
+    to gcc/nvcc works.
+    If you subclass UnixCCompiler, it's not trivial to get your subclass
+    injected in, and still have the right customizations (i.e.
+    distutils.sysconfig.customize_compiler) run on it. So instead of going
+    the OO route, I have this. Note, it's kindof like a wierd functional
+    subclassing going on."""
+
+    # tell the compiler it can processes .cu
+    self.src_extensions.append('.cu')
+
+    # save references to the default compiler_so and _comple methods
+    default_compiler_so = self.compiler_so
+    super = self._compile
+
+    def _compile(obj, src, ext, cc_args, extra_postargs, pp_opts):
+        if '.cu.cc' in os.path.split(src)[1]:
+            # use the cuda for .cu files
+            self.set_executable('compiler_so', ['nvcc'])
+            # use only a subset of the extra_postargs, which are 1-1 translated
+            # from the extra_compile_args in the Extension class
+            postargs = ['-c', '-std=c++11', '-x=cu', '-arch=sm_75',
+                        '--ptxas-options=-v', '--compiler-options','-fPIC'] + extra_postargs[17:20]
+        else:
+            postargs = extra_postargs
+        print('POSTARGS', postargs)
+        super(obj, src, ext, cc_args, postargs, pp_opts)
+        # reset the default compiler_so, which we might have changed for cuda
+        self.compiler_so = default_compiler_so
+
+    # inject our redefined _compile method into the class
+    self._compile = _compile
+
+
 def is_build_action():
     if len(sys.argv) <= 1:
         return False
@@ -100,7 +139,7 @@ def get_supported_instruction_set_flags(flags_to_check):
 
 def get_cpp_flags(build_ext):
     last_err = None
-    default_flags = ['-std=c++11', '-fPIC', '-O2', '-Wall', '-fassociative-math', '-ffast-math', '-ftree-vectorize', '-funsafe-math-optimizations']
+    default_flags = ['-std=c++11', '-fPIC', '-O2', '-Wall', '-fassociative-math', '-ffast-math', '-ftree-vectorize', '-funsafe-math-optimizations', '-fopenmp']
     avx_fma_flags = get_supported_instruction_set_flags(['-mf16c', '-mavx', '-mfma'])
     if sys.platform == 'darwin':
         # Darwin most likely will have Clang, which has libc++.
@@ -746,6 +785,25 @@ def get_common_options(build_ext):
                     'horovod/common/ops/mpi_operations.cc',
                     'horovod/common/ops/adasum/adasum_mpi.cc',
                     'horovod/common/ops/adasum_mpi_operations.cc']
+        if grad_compression:
+            MACROS += [('GRAD_COMPRESSION', '1')]
+            SOURCES += ['horovod/common/ops/compressed/compression/cuda/cuda_functions.cu.cc',
+                        'horovod/common/ops/compressed/mpi_gpu_compressed_operations.cc',
+                        'horovod/common/ops/compressed/mpi_compressed_operations.cc',
+                        'horovod/common/ops/compressed/reducers/all_broadcast.cc',
+                        'horovod/common/ops/compressed/reducers/scatter_allgather.cc',
+                        'horovod/common/ops/compressed/reducers/ring.cc',
+                        'horovod/common/ops/compressed/reducers/nccl_allgather.cc',
+                        'horovod/common/ops/compressed/reducers/nccl_scatter_allgather.cc',
+                        'horovod/common/ops/compressed/reducers/nccl_ring.cc',
+                        'horovod/common/ops/compressed/utils.cc',
+                        'horovod/common/ops/compressed/compression/compressor.cc',
+                        'horovod/common/ops/compressed/common.cc',
+                        'horovod/common/ops/compressed/compression/gpu_compressor.cc',
+                        'horovod/common/ops/compressed/compression/error_feedback.cc',
+                        'horovod/common/ops/compressed/compression/vector_operations.cc',
+                        'horovod/common/ops/compressed/compression/feedback_buffer_manager.cc']
+
         COMPILE_FLAGS += shlex.split(mpi_flags)
         LINK_FLAGS += shlex.split(mpi_flags)
 
@@ -768,18 +826,6 @@ def get_common_options(build_ext):
     if have_cuda:
         set_cuda_options(build_ext, COMPILE_FLAGS, MACROS, INCLUDES, SOURCES, have_mpi, LIBRARY_DIRS, LIBRARIES)
         INCLUDES += ['horovod/common/ops/cuda']
-        if have_mpi and grad_compression:
-            MACROS += [('GRAD_COMPRESSION', '1')]
-            SOURCES += ['horovod/common/ops/compressed/compression/cuda/cuda_functions.cu.cc',
-                        'horovod/common/ops/compressed/mpi_gpu_compressed_operations.cc',
-                        'horovod/common/ops/compressed/reducers/all_broadcast.cc',
-                        'horovod/common/ops/compressed/reducers/scatter_allgather.cc',
-                        'horovod/common/ops/compressed/reducers/ring.cc',
-                        'horovod/common/ops/compressed/utils.cc',
-                        'horovod/common/ops/compressed/compression/compressor.cc',
-                        'horovod/common/ops/compressed/compression/error_feedback.cc',
-                        'horovod/common/ops/compressed/compression/vector_operations.cc',
-                        'horovod/common/ops/compressed/compression/feedback_buffer_manager.cc']
 
 
     if have_rocm:
@@ -795,7 +841,9 @@ def get_common_options(build_ext):
     if have_nccl:
         MACROS += [('HAVE_NCCL', '1')]
         INCLUDES += nccl_include_dirs
-        SOURCES += ['horovod/common/ops/nccl_operations.cc']
+        SOURCES += ['horovod/common/ops/nccl_operations.cc',
+                    'horovod/common/ops/compressed/nccl_compressed_operations.cc',
+                    ]
         if have_mpi:
             SOURCES += ['horovod/common/ops/adasum_gpu_operations.cc']
         LIBRARY_DIRS += nccl_lib_dirs
@@ -1144,7 +1192,6 @@ def check_torch_version():
         raise DistutilsPlatformError(
             'Unable to determine PyTorch version from the version string \'%s\'' % torch.__version__)
     return version
-
 
 def is_torch_cuda():
     try:

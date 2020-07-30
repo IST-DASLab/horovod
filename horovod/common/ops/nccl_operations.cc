@@ -152,6 +152,14 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();
   }
+  auto quantization_bits = GetIntEnvOrDefault(HOROVOD_QUANTIZATION_BITS, 32);
+  auto compression_type = GetEnumEnvOrDefault(HOROVOD_COMPRESSION, CompressionType::NoneCompression);
+  if (quantization_bits < 32 and first_entry.tensor->dtype() == HOROVOD_FLOAT32 and compression_type == CompressionType::NoneCompression) {
+    num_elements = (int64_t)(num_elements * quantization_bits / 32.0);
+  }
+  if (quantization_bits < 16 and first_entry.tensor->dtype() == HOROVOD_FLOAT16 and compression_type == CompressionType::NoneCompression) {
+    num_elements = (int64_t)(num_elements * quantization_bits / 16.0);
+  }
 
   if (response.prescale_factor() != 1.0) {
     // Execute prescaling op

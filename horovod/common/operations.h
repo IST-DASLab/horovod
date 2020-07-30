@@ -109,6 +109,8 @@ int horovod_reduce_op_sum();
 // C interface to return value of the ReduceOp::ADASUM enum field.
 int horovod_reduce_op_adasum();
 
+void horovod_set_quantization_levels(float *levels);
+
 }
 
 Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
@@ -145,6 +147,8 @@ Status EnqueueJoin(std::shared_ptr<OpContext> context,
                               std::shared_ptr<ReadyEvent> ready_event,
                               const std::string name, const int device,
                               StatusCallback callback);
+
+bool tensors_Packed(const std::string& name1,const std::string& name2);
 
 } // namespace common
 } // namespace horovod

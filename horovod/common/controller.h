@@ -131,6 +131,7 @@ public:
   void SetMarkCyclesInTimelinePending(bool value);
   bool MarkCyclesInTimelinePending();
   void SynchronizeTimelineEnabled();
+
   StallInspector& GetStallInspector() { return stall_inspector_; };
 
 protected:

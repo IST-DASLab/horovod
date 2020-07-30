@@ -60,7 +60,7 @@ public:
   virtual bool Enabled(const ParameterManager& param_manager,
                        const std::vector<TensorTableEntry>& entries,
                        const Response& response) const = 0;
-
+  virtual bool EnabledName(const std::string& name) const;
 protected:
   virtual void
   MemcpyInFusionBuffer(const std::vector<TensorTableEntry>& entries,

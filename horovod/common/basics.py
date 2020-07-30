@@ -25,6 +25,11 @@ class HorovodBasics(object):
     def __init__(self, pkg_path, *args):
         full_path = util.get_extension_full_path(pkg_path, *args)
         self.MPI_LIB_CTYPES = ctypes.CDLL(full_path, mode=ctypes.RTLD_GLOBAL)
+        self.MPI_LIB_CTYPES.horovod_allreduce_time.restype = ctypes.c_double
+        self.MPI_LIB_CTYPES.horovod_communication_time.restype = ctypes.c_double
+        self.MPI_LIB_CTYPES.horovod_compression_time.restype = ctypes.c_double
+        self.MPI_LIB_CTYPES.horovod_meta_info_time.restype = ctypes.c_double
+        self.MPI_LIB_CTYPES.horovod_set_quantization_levels.argtypes = [ctypes.POINTER(ctypes.c_float)]
 
         self.Average = self.MPI_LIB_CTYPES.horovod_reduce_op_average()
         self.Sum = self.MPI_LIB_CTYPES.horovod_reduce_op_sum()
@@ -256,3 +261,28 @@ class HorovodBasics(object):
           A boolean value indicating whether ROCm support was compiled.
         """
         return bool(self.MPI_LIB_CTYPES.horovod_rocm_built())
+
+    def allreduce_time(self):
+        return self.MPI_LIB_CTYPES.horovod_allreduce_time()
+
+    def communication_time(self):
+        return self.MPI_LIB_CTYPES.horovod_communication_time()
+
+    def compression_time(self):
+        """Returns Time used by horovod(compressors in custom reducers) for compression/decompression.
+
+        Returns:
+          A float value.
+        """
+        return self.MPI_LIB_CTYPES.horovod_compression_time()
+
+    def meta_info_time(self):
+        """Returns Time used by horovod(comprossors in custom reducers) for meta information in compression.
+
+        Returns:
+          A float value.
+        """
+        return self.MPI_LIB_CTYPES.horovod_meta_info_time()
+
+    def set_quantization_levels(self, arr):
+        self.MPI_LIB_CTYPES.horovod_set_quantization_levels(arr)

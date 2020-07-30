@@ -61,6 +61,10 @@ namespace common {
 #define GLOO_ALLGATHER "GLOO_ALLGATHER"
 #define GLOO_BCAST "GLOO_BCAST"
 
+#define Q_COMPRESSION "Q_COMPRESSION"
+#define Q_DECOMPRESSION "Q_DECOMPRESSION"
+#define Q_NETWORK "Q_NETWORK"
+
 // Horovod knobs.
 #define HOROVOD_MPI_THREADS_DISABLE "HOROVOD_MPI_THREADS_DISABLE"
 #define HOROVOD_TIMELINE "HOROVOD_TIMELINE"
@@ -88,6 +92,14 @@ namespace common {
 #define HOROVOD_GLOO "GLOO"
 #define HOROVOD_ADASUM_MPI_CHUNK_SIZE "HOROVOD_ADASUM_MPI_CHUNK_SIZE"
 #define HOROVOD_THREAD_AFFINITY "HOROVOD_THREAD_AFFINITY"
+#define HOROVOD_REDUCTION "HOROVOD_REDUCTION"
+#define HOROVOD_COMPRESSION "HOROVOD_COMPRESSION"
+#define HOROVOD_COMPRESSION_NORM_TYPE "HOROVOD_COMPRESSION_NORM_TYPE"
+#define HOROVOD_COMPRESSION_LEVELS_TYPE "HOROVOD_COMPRESSION_LEVELS_TYPE"
+#define HOROVOD_QUANTIZATION_BITS "HOROVOD_QUANTIZATION_BITS"
+#define HOROVOD_COMPRESSION_BUCKET_SIZE "HOROVOD_COMPRESSION_BUCKET_SIZE"
+#define HOROVOD_COMPRESSION_ERROR_FEEDBACK "HOROVOD_COMPRESSION_ERROR_FEEDBACK"
+#define HOROVOD_FORCE_CPU_COMPRESSION "HOROVOD_FORCE_CPU_COMPRESSION"
 
 // String constant for gloo interface.
 #define GLOO_DEFAULT_IFACE ""
@@ -115,6 +127,28 @@ enum Communicator {
   LOCAL = 1,
   CROSS = 2
 };
+
+=======
+enum ReductionType {
+  AllBroadcast,
+  ScatterAllgather,
+  Ring,
+  NCCL_Allgather,
+  NCCL_ScatterAllgather,
+  NCCL_Ring,
+  NoneReduction
+};
+
+enum CompressionType {
+  MaxMin,
+  Uni,
+  Exp,
+  NoneCompression
+};
+
+enum NormType { L2, Linf };
+enum LevelsType { Pos, Wide };
+
 
 inline std::string CommunicatorName(Communicator comm) {
   switch (comm) {

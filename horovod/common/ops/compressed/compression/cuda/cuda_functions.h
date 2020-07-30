@@ -1,54 +1,73 @@
-#ifndef CUDA_FUNCTIONS_H_
-#define CUDA_FUNCTIONS_H_
+#ifndef CUDA_FUNCTIONS_H
+#define CUDA_FUNCTIONS_H
 
+#include "../../../../common.h"
 #include <cuda.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
 
+#define Half __half
 
-//#define CurandState curandState
-//#define CurandState curandStatePhilox4_32_10_t
-#define CurandState int
+struct xorshift128p_state {
+  uint64_t a, b;
+};
 
+//#define CurandState int
+#define CurandState xorshift128p_state
+
+int CUDA_get_curand_array_size(int num_elems);
 void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
                       cudaStream_t stream);
-int CUDA_get_curand_array_size(int num_elems);
-// y += x.
-void CUDA_add(int n, const float* x, float* y, float* sum, cudaStream_t stream);
-// z = y - x
-void CUDA_diff(int n, const float* x, const float* y, float* z, cudaStream_t stream);
-void CUDA_find_max_and_min_bucket(const float* x, float* maxandmin, int n,
-                                  int bucket_size, cudaStream_t stream);
-void CUDA_find_Linf_bucket(const float* x, float* maxs, int n, int bucket_size,
-                           cudaStream_t stream);
-void CUDA_find_norms_bucket(const float* x, float* max, float* norm, int n,
-                            int bucket_size, cudaStream_t stream);
-void CUDA_find_L2_and_max_log_bucket(const float* x, float* norm, unsigned char* max_log, float rev_multiplier, int n,
-                                     int bucket_size, cudaStream_t stream);
 
-void CUDA_quantize_maxmin(unsigned char* y, const float* x,
-                          const float* maxandmin, int n, int bits,
-                          int bucket_size, CurandState* states,
-                          cudaStream_t stream);
-void CUDA_dequantize_maxmin(const unsigned char* y, const float* maxandmin,
-                            float* x, int n, int bits, int bucket_size,
-                            cudaStream_t stream);
-void CUDA_Linf_normalized_quantize_values(unsigned char* y, const float* x,
-                                          const float* norms, const float* levels,
-                                          int n, int bits, int bucket_size,
-                                          CurandState* states, cudaStream_t stream);
-void CUDA_Linf_normalized_dequantize_values(const unsigned char* y,
-                                            const float* norms, const float* levels,
-                                            float* x, int n, int bits,
-                                            int bucket_size, cudaStream_t stream);
-void CUDA_L2_normalized_quantize_values(unsigned char* y, const float* x,
-                                          const float* norms, const unsigned char* max_log, const float* levels,
-                                          int n, int bits, int bucket_size,
-                                          CurandState* states, cudaStream_t stream);
-void CUDA_L2_normalized_dequantize_values(const unsigned char* y,
-                                            const float* norms, const unsigned char* max_log, const float* levels,
-                                            float* x, int n, int bits,
-                                            int bucket_size, cudaStream_t stream);
+void CUDA_add_fp32(int n, const float* x, float* y, float* sum, cudaStream_t stream);
+void CUDA_add_fp16(int n, const Half* x, Half* y, Half* sum, cudaStream_t stream);
 
-#endif // CUDA_FUNCTIONS_H_
+void CUDA_quantize_maxmin_fp16(unsigned char* input_data,
+                               unsigned char* output_data,
+                               unsigned char* feedback, int num_elems, int bits,
+                               int bucket_size, CurandState* states,
+                               cudaStream_t stream);
+
+void CUDA_quantize_maxmin_fp32(unsigned char* input_data,
+                               unsigned char* output_data,
+                               unsigned char* feedback, int num_elems, int bits,
+                               int bucket_size, CurandState* states,
+                               cudaStream_t stream);
+
+void CUDA_dequantize_maxmin_fp16(unsigned char* input_data,
+                                 unsigned char* output_data, int num_elems,
+                                 int bits, int bucket_size, bool add,
+                                 cudaStream_t stream);
+void CUDA_dequantize_maxmin_fp32(unsigned char* input_data,
+                                 unsigned char* output_data, int num_elems,
+                                 int bits, int bucket_size, bool add,
+                                 cudaStream_t stream);
+
+void CUDA_quantize_Norm_fp32(
+    unsigned char* input_data, unsigned char* output_data,
+    unsigned char* feedback, float* levels, int num_elems, int bits,
+    int bucket_size, CurandState* states, horovod::common::NormType norm_type,
+    horovod::common::LevelsType level_type, cudaStream_t stream);
+
+void CUDA_quantize_Norm_fp16(
+    unsigned char* input_data, unsigned char* output_data,
+    unsigned char* feedback, Half* levels, int num_elems, int bits,
+    int bucket_size, CurandState* states, horovod::common::NormType norm_type,
+    horovod::common::LevelsType level_type, cudaStream_t stream);
+void CUDA_dequantize_Norm_fp32(unsigned char* input_data,
+                               unsigned char* output_data, float* levels,
+                               int num_elems, int bits, int bucket_size,
+                               horovod::common::LevelsType level_type, bool add,
+                               cudaStream_t stream);
+
+void CUDA_dequantize_Norm_fp16(unsigned char* input_data,
+                               unsigned char* output_data, Half* levels,
+                               int num_elems, int bits, int bucket_size,
+                               horovod::common::LevelsType level_type, bool add,
+                               cudaStream_t stream);
+
+void CUDA_convert_to_halves(float* arr, Half* output, int numel);
+
+#endif // CUDA_FUNCTIONS_H

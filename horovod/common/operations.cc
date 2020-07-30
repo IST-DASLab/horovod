@@ -48,6 +48,9 @@
 #include "mpi/mpi_controller.h"
 #include "ops/mpi_operations.h"
 #include "ops/adasum_mpi_operations.h"
+#if GRAD_COMPRESSION
+#include "ops/compressed/mpi_compressed_operations.h"
+#endif
 #endif
 
 #if HAVE_GPU
@@ -59,6 +62,9 @@
 
 #if HAVE_NCCL
 #include "ops/nccl_operations.h"
+#if GRAD_COMPRESSION
+#include "ops/compressed/nccl_compressed_operations.h"
+#endif
 #if HAVE_MPI
 #include "ops/adasum_gpu_operations.h"
 #endif
@@ -182,6 +188,10 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
 #endif
 
 #if HAVE_NCCL && HOROVOD_GPU_ALLREDUCE == 'N'
+#if GRAD_COMPRESSION
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+        new NCCL_CompressedAllreduce(&nccl_context, &gpu_context, &state)));
+#endif
   allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
       new NCCLAllreduce(&nccl_context, &gpu_context, &state)));
 #endif
@@ -229,6 +239,10 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   if (mpi_context.IsEnabled()){
     adasum_ops.push_back(
         std::shared_ptr<AllreduceOp>(new AdasumMPIAllreduceOp(&mpi_context, &state)));
+#if GRAD_COMPRESSION
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+        new MPI_CompressedAllReduce(&mpi_context, &state)));
+#endif
     allreduce_ops.push_back(
         std::shared_ptr<AllreduceOp>(new MPIAllreduce(&mpi_context,&state)));
     allgather_ops.push_back(
@@ -886,6 +900,11 @@ int horovod_reduce_op_adasum() {
   return ReduceOp::ADASUM;
 }
 
+
+void horovod_set_quantization_levels(float* levels) {
+  SetQuantizationLevels(levels);
+}
+
 }
 
 // Contexts and controller must be initialized and the background thread
@@ -1117,6 +1136,10 @@ Status EnqueueJoin(std::shared_ptr<OpContext> context,
     LOG(TRACE, horovod_global.controller->GetRank()) << "Enqueued " << name;
   }
   return status;
+}
+
+bool tensors_Packed(const std::string& name1,const std::string& name2) {
+  return op_manager->Packed(name1, name2);
 }
 
 } // namespace common

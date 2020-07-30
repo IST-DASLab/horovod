@@ -74,7 +74,7 @@ Status MPIAllreduce::Execute(std::vector<TensorTableEntry>& entries, const Respo
     MemcpyOutFusionBuffer(buffer_data, entries);
     timeline.ActivityEndAll(entries);
   }
-
+//  global_state_->allreduce_time += time_since(start);
   return Status::OK();
 }
 

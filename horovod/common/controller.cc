@@ -711,7 +711,8 @@ ResponseList Controller::FuseResponses(std::deque<Response>& responses) {
             response.tensor_type() == new_response.tensor_type() &&
             tensor_size + new_tensor_size <= TensorFusionThresholdBytes() &&
             response.prescale_factor() == new_response.prescale_factor() &&
-            response.postscale_factor() == new_response.postscale_factor()) {
+            response.postscale_factor() == new_response.postscale_factor() &&
+            tensors_Packed(response.tensor_names()[0], new_response.tensor_names()[0])) {
           // These tensors will fuse together well.
           tensor_size += new_tensor_size;
           response.add_tensor_name(std::move(new_response.tensor_names()[0]));

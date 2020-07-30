@@ -1,28 +1,33 @@
-#include "ring.h"
-#include "../utils.h"
+#include "nccl_ring.h"
+#if NCCL_VERSION_CHECK(2, 7, 0)
 
 namespace horovod {
 namespace common {
 
-MPI_Allreduce_Ring::MPI_Allreduce_Ring(MPIContext* mpi_context,
-                                       HorovodGlobalState* global_state,
-                                       Compressor* compressor,
-                                       Summator* summator)
-    : MPIReducer(mpi_context, global_state, compressor, summator) {
+NCCL_Allreduce_Ring::NCCL_Allreduce_Ring(
+    horovod::common::NCCLContext* nccl_context,
+    horovod::common::GPUContext* gpu_context,
+    horovod::common::GPUOpContext* gpu_op_context,
+    horovod::common::HorovodGlobalState* global_state,
+    horovod::common::Compressor* compressor,
+    horovod::common::Summator* summator)
+    : NCCLReducer(nccl_context, gpu_context, gpu_op_context, global_state,
+                  compressor, summator) {
   if (global_state_->controller->GetRank() == 0) {
-    LOG(INFO) << "Ring";
+    LOG(INFO) << "NCCL_Allreduce_Ring";
   }
 }
 
-Status MPI_Allreduce_Ring::Init(
+Status NCCL_Allreduce_Ring::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
   int64_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
   auto dtype = entries[0].tensor->dtype();
-  int64_t allocated_compression_buffer_size_send = round_to(
-      compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype), ALIGNMENT_UNIT);
+  int64_t allocated_compression_buffer_size_send =
+      round_to(compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype),
+               ALIGNMENT_UNIT);
   int64_t allocated_compression_buffer_size_recv =
       allocated_compression_buffer_size_send;
   int64_t buffer_size = allocated_compression_buffer_size_send * world_size +
@@ -39,6 +44,11 @@ Status MPI_Allreduce_Ring::Init(
     }
     return status;
   }
+
+  stream_ =
+      &gpu_context_
+           ->streams[global_state_->current_nccl_stream][entries[0].device];
+
   auto buffer = bufferManager_.GetBuffer(first_entry.device,
                                          first_entry.context->framework(),
                                          global_state_->current_nccl_stream);
@@ -59,11 +69,10 @@ Status MPI_Allreduce_Ring::Init(
   return Status::OK();
 }
 
-Status MPI_Allreduce_Ring::AllreduceDivision(
-    int num_elements, MPI_Comm comm,
+Status NCCL_Allreduce_Ring::AllreduceDivision(
+    int num_elements, ncclComm_t* nccl_comm_,
     std::vector<horovod::common::TensorTableEntry>& entries,
     int64_t global_offset) {
-  compressor_->Finalize();
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
 
@@ -73,8 +82,6 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   const size_t recv_from = (rank - 1 + world_size) % world_size;
   // Send to your right neighbor with wrap-around.
   const size_t send_to = (rank + 1) % world_size;
-  MPI_Request recv_req;
-  MPI_Status recv_status;
   auto segment_size = [num_elems_per_node, residue](int segment) {
     return num_elems_per_node + ((segment < residue) ? 1 : 0);
   };
@@ -86,7 +93,6 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   int recv_segment_idx, send_segment_idx;
   int64_t buf_send_idx, buf_recv_idx;
   int64_t send_size, recv_size;
-  auto start = clock_::now();
   for (int i = 0; i < world_size - 1; i++) {
     recv_segment_idx = (rank - i - 1 + world_size) % world_size;
     send_segment_idx = (rank - i + world_size) % world_size;
@@ -99,44 +105,37 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
         round_to(compressor_->BufferSize(segment_size(recv_segment_idx),
                                          entries, buf_recv_idx, global_offset),
                  ALIGNMENT_UNIT);
-
-    start = clock_::now();
-    MPI_CHECK(MPI_Irecv(gradients_recv_, recv_size, MPI_UNSIGNED_CHAR,
-                        recv_from, 0, comm, &recv_req));
     send_size =
         round_to(compressor_->Compress(
             gradients_send_, entries, error_feedback_, buf_send_idx,
             global_offset, segment_size(send_segment_idx), i == 0),
                  ALIGNMENT_UNIT);
-    compressor_->Finalize();
-    MPI_CHECK(MPI_Send(gradients_send_, send_size, MPI_UNSIGNED_CHAR, send_to,
-                       0, comm));
-
-    // Wait for recv to complete before reduction
-    MPI_CHECK(MPI_Wait(&recv_req, &recv_status));
-
-    global_state_->communication_time += time_since(start);
-
-    compressor_->Decompress(gradients_recv_, entries,
-                            buf_recv_idx, global_offset,
-                            segment_size(recv_segment_idx), true);
-    compressor_->Finalize();
+    NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart());
+    NCCL_CALL_CHECK("ncclSend", ncclSend(gradients_send_, send_size, ncclChar, send_to,
+                                         *nccl_comm_, *stream_));
+    NCCL_CALL_CHECK("ncclRecv", ncclRecv(gradients_recv_, recv_size, ncclChar, recv_from,
+                                         *nccl_comm_, *stream_));
+    NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd());
+    compressor_->Decompress(gradients_recv_, entries, buf_recv_idx,
+                            global_offset, segment_size(recv_segment_idx),
+                            true);
   }
 
   send_segment_idx = (rank + world_size + 1) % world_size;
   buf_send_idx =
       (segment_ends[send_segment_idx] - segment_size(send_segment_idx));
   unsigned char* send_buf = gradients_send_;
-  send_size =
-      round_to(compressor_->Compress(send_buf, entries, error_feedback_,
-                                     buf_send_idx, global_offset,
-                                     segment_size(send_segment_idx), false, true),
-               ALIGNMENT_UNIT);
+  send_size = round_to(compressor_->Compress(send_buf, entries, error_feedback_,
+                                             buf_send_idx, global_offset,
+                                             segment_size(send_segment_idx),
+                                             false, true),
+                       ALIGNMENT_UNIT);
   compressor_->Decompress(send_buf, entries, buf_send_idx, global_offset,
                           segment_size(send_segment_idx), false);
+
   unsigned char* recv_buf = send_buf + send_size;
   unsigned char* compressed_buf = recv_buf;
-  compressor_->Finalize();
+
   // Propagate reduced and compressed chunks without decompression.
   for (int i = 0; i < world_size - 1; i++) {
     recv_segment_idx = (rank - i + world_size) % world_size;
@@ -147,13 +146,15 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
         round_to(compressor_->BufferSize(segment_size(recv_segment_idx),
                                          entries, buf_recv_idx, global_offset),
                  ALIGNMENT_UNIT);
+    NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart());
 
-    start = clock_::now();
     // Segment to recv - at every iteration we receive segment (r-i)
-    MPI_CHECK(MPI_Sendrecv(send_buf, send_size, MPI_UNSIGNED_CHAR, send_to, 0, recv_buf,
-                           recv_size, MPI_UNSIGNED_CHAR, recv_from, 0, comm,
-                           &recv_status));
-    global_state_->communication_time += time_since(start);
+    NCCL_CALL_CHECK("ncclSend", ncclSend(send_buf, send_size, ncclChar, send_to,
+                                         *nccl_comm_, *stream_));
+    NCCL_CALL_CHECK("ncclRecv", ncclRecv(recv_buf, recv_size, ncclChar, recv_from,
+                                         *nccl_comm_, *stream_));
+    NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd());
+
     send_buf += send_size;
     recv_buf += recv_size;
     send_size = recv_size;
@@ -166,7 +167,8 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
         (segment_ends[recv_segment_idx] - segment_size(recv_segment_idx));
 
     compressor_->Decompress(compressed_buf, entries, buf_recv_idx,
-                            global_offset, segment_size(recv_segment_idx), false);
+                            global_offset, segment_size(recv_segment_idx),
+                            false);
 
     recv_size =
         round_to(compressor_->BufferSize(segment_size(recv_segment_idx),
@@ -175,10 +177,10 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
 
     compressed_buf += recv_size;
   }
-  global_state_->compression_time = compressor_->getCompressionTime();
-  global_state_->meta_info_time = compressor_->getMetaInfoTime();
   return Status::OK();
 }
 
 } // namespace common
 } // namespace horovod
+
+#endif

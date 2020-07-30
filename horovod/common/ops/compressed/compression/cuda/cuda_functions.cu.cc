@@ -1,49 +1,52 @@
 #include "cuda_functions.h"
+#include <assert.h>
 #include <cstdlib>
+#include <cuda_fp16.h>
 #include <iostream>
+#include <string>
 
-#define MAX_THREADS_PER_BLOCK 1024
-#define EPS 1e-6
-//#define BLOCKS_PER_GRID(n) (n + (MAX_THREADS_PER_BLOCK - 1)) / MAX_THREADS_PER_BLOCK
-#define BLOCKS_PER_GRID(n) 512
-
-#define CUDA_CHECK(condition)                            \
-do {                                                     \
-  cudaError_t cuda_result = condition;                   \
-  if (cuda_result != cudaSuccess) {                      \
-      throw std::logic_error(std::string(#condition)     \
-        + " failed: " + cudaGetErrorString(cuda_result));\
-    }                                                    \
-} while (0)                                              \
-
-
-__device__ int toInt(unsigned char* z) {
-  return ((unsigned int)z[0] & 0xFF) << 24 | ((unsigned int)z[1] & 0xFF) << 16 |
-         ((unsigned int)z[2] & 0xFF) << 8 | ((unsigned int)z[3] & 0xFF);
+const float EPS = 1e-10;
+const int PACK_SIZE = 8;
+const int MAX_THREADS_PER_BLOCK = 1024;
+// constexpr int BLOCKS_PER_GRID(int num_elems) { return 512; }
+constexpr int BLOCKS_PER_GRID(int num_elems) {
+  return (num_elems + (MAX_THREADS_PER_BLOCK - 1)) / MAX_THREADS_PER_BLOCK;
 }
 
-__global__ void _init_curand(unsigned int seed, CurandState* states) {
-  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-//  /* we have to initialize the state */
-//    curand_init(seed,  /* the seed can be the same for each core, here we pass
-//    the
-//                          time in from the CPU */
-//                index, /* the sequence number should be different for each
-//                core
-//                          (unless you want all cores to get the same sequence
-//                          of numbers for some reason - use thread id! */
-//                0, /* the offset is how much extra we advance in the sequence
-//                for
-//                      each call, can be 0 */
-//                &states[index]);
+#include "cuda_rand.h"
 
-  unsigned char z[4];
-  for (int i = 0; i < 4; i++)
-    z[i] = 128 + index % 128;
-  states[index] = toInt(z);
+#define CUDA_CHECK(condition)                                                  \
+  do {                                                                         \
+    cudaError_t cuda_result = condition;                                       \
+    if (cuda_result != cudaSuccess) {                                          \
+      throw std::runtime_error(                                                \
+          std::string(#condition) + " on line " + std::to_string(__LINE__) +   \
+          " returned: " + cudaGetErrorString(cuda_result));                    \
+    }                                                                          \
+  } while (0)
+
+/*
+==== Utilite functions. ===
+*/
+
+__device__ __half habs(__half a) {
+  return __hlt(a, (__half)(-EPS)) ? __hneg(a) : a;
 }
 
-__global__ void _add(int n, const float *x, const float* y, float* sum) {
+__device__ __half hmax(__half a, __half b) { return __hge(a, b) ? a : b; }
+
+__device__ __half hmin(__half a, __half b) { return __hge(a, b) ? b : a; }
+
+
+__global__ void float2half(float* input, __half* output, int numel) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+  for (int i = index; i < numel; i += stride) {
+    output[i] = __float2half(input[i]);
+  }
+}
+template <typename T>
+__global__ void _add(int n, const T* x, const T* y, T* sum) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x * gridDim.x;
   for (int i = index; i < n; i += stride) {
@@ -51,60 +54,86 @@ __global__ void _add(int n, const float *x, const float* y, float* sum) {
   }
 }
 
-__global__ void _diff(int n, const float* x, const float* y, float* z) {
+template <>
+__global__ void _add<__half>(int n, const __half* x, const __half* y,
+                             __half* sum) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x * gridDim.x;
   for (int i = index; i < n; i += stride) {
-    z[i] = y[i] - x[i];
+    sum[i] = __hadd(x[i], y[i]);
   }
 }
 
-__global__ void _find_max_and_min_bucket_seq(const float *x, float *maxandmin,
-                                             int n, int bucket_size) {
+int CUDA_get_curand_array_size(int num_elems) {
+  return BLOCKS_PER_GRID(num_elems) * MAX_THREADS_PER_BLOCK *
+         sizeof(CurandState);
+}
+
+#define Add_Impl(type_name, T)                                                 \
+void CUDA_add_##type_name(int n, const T* x, T* y, T* sum, cudaStream_t stream) {          \
+  int blocks = BLOCKS_PER_GRID(n);                                             \
+  int num_threads = MAX_THREADS_PER_BLOCK;                                     \
+  _add<T><<<blocks, num_threads, 0, stream>>>(n, x, y, sum);                   \
+}
+
+Add_Impl(fp32, float)
+Add_Impl(fp16, Half)
+/*
+==== Functions for quantization preparation. ===
+*/
+template <typename T>
+__global__ void MaxMin_find_meta(const T* input, unsigned char* meta, int n,
+                                 int bucket_size, int bits) {
+  T* maxmin = (T*)meta;
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
+  unsigned int divisor = (1 << bits) - 1;
 
   for (int i = index; i < (n + bucket_size - 1) / bucket_size; i += stride) {
-    float mmin = x[i * bucket_size];
-    float mmax = x[i * bucket_size];
-    for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
-      mmin = fminf(mmin, x[j]);
-      mmax = fmaxf(mmax, x[j]);
+    T mmin = input[i * bucket_size];
+    T mmax = input[i * bucket_size];
+    for (int j = i * bucket_size + 1; j < fminf((i + 1) * bucket_size, n);
+         j++) {
+      mmin = fminf(mmin, input[j]);
+      mmax = fmaxf(mmax, input[j]);
     }
-    maxandmin[2 * i] = mmax;
-    maxandmin[2 * i + 1] = mmin;
+    maxmin[2 * i] = (mmax - mmin) / divisor;
+    maxmin[2 * i + 1] = mmin;
   }
 }
 
-__global__ void _find_norms_bucket_seq(const float *x, float *max, float *norm,
-                                       int n, const int bucket_size) {
+template <>
+__global__ void MaxMin_find_meta<__half>(const __half* input,
+                                         unsigned char* meta, int n,
+                                         int bucket_size, int bits) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
+  unsigned int divisor = (1 << bits) - 1;
+  __half* maxmin = (__half*)meta;
 
   for (int i = index; i < (n + bucket_size - 1) / bucket_size; i += stride) {
-    float bnorm = 0.0;
-    float bmax = fabsf(x[i * bucket_size]);
+    __half mmax = input[i * bucket_size];
+    __half mmin = input[i * bucket_size];
     for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
-      bnorm += x[j] * x[j];
-      bmax = fmaxf(bmax, fabsf(x[j]));
+      mmax = hmax(mmax, input[j]);
+      mmin = hmin(mmin, input[j]);
     }
-    max[i] = bmax;
-    bnorm = sqrt(bnorm);
-    if (fabsf(bnorm) < EPS)
-      bnorm += EPS;
-    norm[i] = bnorm;
+    maxmin[2 * i] = __hdiv(__hsub(mmax, mmin), __uint2half_rd(divisor));
+    maxmin[2 * i + 1] = mmin;
   }
 }
 
-__global__ void _find_Linf_bucket_seq(const float* x, float* norms, int n,
-                                      const int bucket_size) {
+template <typename T>
+__global__ void LinfNorm_find_meta(const T* input, unsigned char* meta, int n,
+                                   const int bucket_size) {
+  T* norms = (T*)meta;
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
 
   for (int i = index; i < (n + bucket_size - 1) / bucket_size; i += stride) {
-    float bmax = fabsf(x[i * bucket_size]);
+    T bmax = fabsf(input[i * bucket_size]);
     for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
-      bmax = fmaxf(bmax, fabsf(x[j]));
+      bmax = fmaxf(bmax, fabsf(input[j]));
     }
     if (fabsf(bmax) < EPS)
       bmax += EPS;
@@ -112,61 +141,438 @@ __global__ void _find_Linf_bucket_seq(const float* x, float* norms, int n,
   }
 }
 
-__global__ void _find_L2_max_log_bucket_seq(const float* x, float* norm, unsigned char* max_logs,
-                                            float rev_multiplier, int n, const int bucket_size) {
+template <>
+__global__ void LinfNorm_find_meta<__half>(const __half* input,
+                                           unsigned char* meta, int n,
+                                           const int bucket_size) {
+  __half* norms = (__half*)meta;
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
+
   for (int i = index; i < (n + bucket_size - 1) / bucket_size; i += stride) {
-      float bnorm = 0.0;
-      float bmax = fabsf(x[i * bucket_size]);
-      for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
-          bnorm += x[j] * x[j];
-          bmax = fmaxf(bmax, fabsf(x[j]));
-      }
-      bnorm = sqrt(bnorm);
-      if (fabsf(bnorm) < EPS)
-          bnorm += EPS;
-      norm[i] = bnorm;
-      bmax /= bnorm;
-      unsigned char max_log = 0;
-      while (bmax > EPS && bmax * rev_multiplier - 1.0 < EPS) {
-          bmax *= rev_multiplier;
-          max_log++;
-      }
-      max_logs[i] = max_log;
+    __half bmax = habs(input[i * bucket_size]);
+    for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
+      bmax = hmax(bmax, habs(input[j]));
+    }
+    if (__hlt(habs(bmax), (__half)EPS))
+      __hadd(bmax, (__half)EPS);
+    norms[i] = bmax;
   }
 }
 
-
-__device__ void TausStep(unsigned char& z, unsigned int S1, unsigned int S2,
-                         int S3, unsigned M) {
-  unsigned b = (((z << S1) ^ z) >> S2);
-  z = (((z & M) << S3) ^ b);
+template <typename T>
+__global__ void L2Norm_find_meta(const T* input, unsigned char* meta, int n,
+                                 const int bucket_size) {
+  T* norm = (T*)meta;
+  int num_buckets = (n + bucket_size - 1) / bucket_size;
+  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+  unsigned int stride = gridDim.x * blockDim.x;
+  for (int i = index; i < num_buckets; i += stride) {
+    T bnorm = 0.0;
+    for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
+      bnorm += input[j] * input[j];
+    }
+    if (bnorm < EPS)
+      bnorm += EPS;
+    if ((i + 1) * bucket_size > n) {
+      // not full bucket. Need to rescale.
+      bnorm *= bucket_size / ((n - i * bucket_size) * 1.0);
+    }
+    bnorm = sqrt(bnorm);
+    norm[i] = bnorm;
+  }
 }
 
-__device__ void LCGStep(unsigned char& z, unsigned A, unsigned C) {
-  z = (A * z + C);
+template <>
+__global__ void L2Norm_find_meta<__half>(const __half* input,
+                                         unsigned char* meta, int n,
+                                         const int bucket_size) {
+  __half* norm = (__half*)meta;
+  int num_buckets = (n + bucket_size - 1) / bucket_size;
+  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
+  unsigned int stride = gridDim.x * blockDim.x;
+  for (int i = index; i < num_buckets; i += stride) {
+    __half bnorm = (__half)0.0;
+    for (int j = i * bucket_size; j < fminf((i + 1) * bucket_size, n); j++) {
+      bnorm += __hmul(input[j], input[j]);
+    }
+    if (__hlt(bnorm, (__half)EPS))
+      bnorm = __hadd(bnorm, (__half)EPS);
+    if ((i + 1) * bucket_size > n) {
+      // not full bucket. Need to rescale.
+      float rescale_factor = bucket_size / ((n - i * bucket_size) * 1.0);
+      bnorm = __hmul(bnorm, __float2half(rescale_factor));
+    }
+    bnorm = hsqrt(bnorm);
+    norm[i] = bnorm;
+  }
 }
 
-__device__ float HybridTaus(int* state_p) {
-  unsigned char z[4];
-  int state = *state_p;
-  // present int as char array.
-  z[0] = (state >> 24) & 0xFF;
-  z[1] = (state >> 16) & 0xFF;
-  z[2] = (state >> 8) & 0xFF;
-  z[3] = state & 0xFF;
-  TausStep(z[0], 13, 19, 12, 4294967294UL);
-  TausStep(z[1], 2, 25, 4, 4294967288UL);
-  TausStep(z[2], 3, 11, 17, 4294967280UL);
-  LCGStep(z[3], 1664525, 1013904223UL);
-  *state_p = toInt(z);
-  return (z[0] ^ z[1] ^ z[2] ^ z[3]) / 256.0;
+// Single value quantization functions
+template <typename T>
+inline __device__ unsigned char
+MaxMinEncodeValue(T input, T* feedback, unsigned char* meta_info,
+                  unsigned int idx, int bucket_size, int bits, float rand,
+                  void* ctx) {
+  int bucket_no = idx / bucket_size;
+  T* maxmin = ((T*)meta_info) + 2 * bucket_no;
+  if (maxmin[0] - maxmin[1] < EPS) {
+    return 0;
+  }
+  T min = maxmin[1];
+  T unit = maxmin[0];
+  T d = ((input - min) / unit) + rand;
+  unsigned char level = (unsigned char)floor(d);
+  if (feedback)
+    *feedback = input - (min + level * unit);
+  return level;
 }
 
+template <>
+inline __device__ unsigned char
+MaxMinEncodeValue<__half>(__half input, __half* feedback,
+                          unsigned char* meta_info, unsigned int idx,
+                          int bucket_size, int bits, float rand, void* ctx) {
+  int bucket_no = idx / bucket_size;
+  __half* maxmin = ((__half*)meta_info) + 2 * bucket_no;
+  if (__hle(__hsub(maxmin[0], maxmin[1]), (__half)EPS)) {
+    return 0;
+  }
+  __half rand_fp16 = __float2half(rand);
+  __half min = maxmin[1];
+  __half unit = maxmin[0];
+  __half d = __hsub(input, min);
+  d = __hdiv(d, unit);
+  d = __hadd(d, rand_fp16);
+  unsigned char level = (unsigned char)__half2uint_rd(hfloor(d));
+  if (feedback) {
+    d = __hadd(min, __hmul(level, unit));
+    *feedback = __hsub(input, d);
+  }
+  return level;
+}
+
+template <typename T>
+inline __device__ T MaxMinDecodeValue(unsigned char input,
+                                      unsigned char* meta_info,
+                                      unsigned int idx, int bucket_size,
+                                      int bits, void* ctx) {
+  int bucket_no = idx / bucket_size;
+  T* maxmin = ((T*)meta_info) + 2 * bucket_no;
+  T min = maxmin[1];
+  T unit = maxmin[0];
+  return min + unit * input;
+}
+
+template <>
+inline __device__ __half MaxMinDecodeValue<__half>(unsigned char input,
+                                                   unsigned char* meta_info,
+                                                   unsigned int idx,
+                                                   int bucket_size, int bits,
+                                                   void* ctx) {
+  int bucket_no = idx / bucket_size;
+  __half* maxmin = ((__half*)meta_info) + 2 * bucket_no;
+  __half unit = maxmin[0];
+  __half min = maxmin[1];
+  return __hadd(min, __hmul(unit, __uint2half_rd((unsigned int)input)));
+}
+
+template <typename T>
+inline __device__ unsigned char
+NormPosEncodeValue(T input, T* feedback, unsigned char* meta_info,
+                   unsigned int idx, int bucket_size, int bits, float rand,
+                   void* ctx) {
+  int bucket_no = idx / bucket_size;
+  T norm = ((T*)meta_info)[bucket_no];
+  char sign;
+  int num_levels = 1 << (bits - 1);
+  T* levels = (T*)ctx;
+  T d = fabs(input / norm);
+  sign = (input < -EPS);
+  unsigned char level_idx = 0;
+
+  // levels are going 1.0 q_n q_{n-1} ... 0.0(or -1.0)
+  while (level_idx + 1 < num_levels) {
+    if (d - levels[level_idx + 1] > EPS) {
+      if (d + (levels[level_idx] - levels[level_idx + 1]) * rand -
+              levels[level_idx] <
+          -EPS) {
+        level_idx++;
+      }
+      break;
+    }
+    level_idx++;
+  }
+  // update error feedback
+  if (feedback) {
+    T recovered_v = norm * (sign ? -1.0 : 1.0);
+    if (bits > 1)
+      recovered_v *= levels[level_idx];
+    *feedback = input - recovered_v;
+  }
+  level_idx |= (sign << (bits - 1));
+  return level_idx;
+}
+
+template <>
+inline __device__ unsigned char
+NormPosEncodeValue<__half>(__half input, __half* feedback,
+                           unsigned char* meta_info, unsigned int idx,
+                           int bucket_size, int bits, float rand, void* ctx) {
+  int bucket_no = idx / bucket_size;
+  __half norm = ((__half*)meta_info)[bucket_no];
+  int num_levels = 1 << (bits - 1);
+  __half* levels = (__half*)ctx;
+  __half d = habs(__hdiv(input, norm));
+  bool sign = __hlt(input, (__half)(-EPS));
+  unsigned char level_idx = 0;
+  __half rand_fp16 = __float2half(rand);
+  while (level_idx + 1 < num_levels) {
+    if (__hgt(__hsub(d, levels[level_idx + 1]), (__half)EPS)) {
+      __half diff =
+          __hmul(__hsub(levels[level_idx], levels[level_idx + 1]), rand_fp16);
+      if (__hlt(__hsub(__hadd(d, diff), levels[level_idx]), (__half)(-EPS))) {
+        level_idx++;
+      }
+      break;
+    }
+    level_idx++;
+  }
+  // update error feedback
+  if (feedback) {
+    __half recovered_v = __hmul(norm, (sign ? (__half)(-1.0) : (__half)(1.0)));
+    if (bits > 1)
+      recovered_v = __hmul(recovered_v, levels[level_idx]);
+    *feedback = __hsub(input, recovered_v);
+  }
+  level_idx |= (sign << (bits - 1));
+  return level_idx;
+}
+
+template <typename T>
+inline __device__ T NormPosDecodeValue(unsigned char input,
+                                       unsigned char* meta_info,
+                                       unsigned int idx, int bucket_size,
+                                       int bits, void* ctx) {
+  int bucket_no = idx / bucket_size;
+  T norm = ((T*)meta_info)[bucket_no];
+  T* levels = (T*)ctx;
+  int num_levels = 1 << (bits - 1);
+  char sign = (input & num_levels) ? -1 : 1;
+  input &= num_levels - 1;
+  T decode_value = norm * sign;
+
+  if (bits > 1) {
+    decode_value *= levels[input];
+  }
+  return decode_value;
+}
+
+template <>
+inline __device__ __half NormPosDecodeValue<__half>(unsigned char input,
+                                                    unsigned char* meta_info,
+                                                    unsigned int idx,
+                                                    int bucket_size, int bits,
+                                                    void* ctx) {
+  int bucket_no = idx / bucket_size;
+  __half norm = ((__half*)meta_info)[bucket_no];
+  __half* levels = (__half*)ctx;
+  int num_levels = 1 << (bits - 1);
+  __half sign = (input & num_levels) ? (__half)(-1.0) : (__half)(1.0);
+  input &= num_levels - 1;
+  __half decode_value = __hmul(norm, sign);
+  if (bits > 1) {
+    decode_value = __hmul(decode_value, levels[input]);
+  }
+  return decode_value;
+}
+
+template <typename T>
+inline __device__ unsigned char
+NormWideEncodeValue(T input, T* feedback, unsigned char* meta_info,
+                    unsigned int idx, int bucket_size, int bits, float rand,
+                    void* ctx) {
+  int bucket_no = idx / bucket_size;
+  T norm = ((T*)meta_info)[bucket_no];
+  int num_levels = 1 << bits;
+  T* levels = (T*)ctx;
+  T d = input / norm;
+  unsigned char level_idx = 0;
+  unsigned char flevel = 0;
+  // levels are going 1.0 q_n q_{n-1} ... 0.0(or -1.0)
+  while (level_idx + 1 < num_levels) {
+    if (d - levels[level_idx + 1] > EPS) {
+      flevel = level_idx;
+      if (d + (levels[level_idx] - levels[level_idx + 1]) * rand -
+              levels[level_idx] <
+          -EPS) {
+        level_idx++;
+      }
+      break;
+    }
+    level_idx++;
+  }
+  // update error feedback
+  if (feedback) {
+    T recovered_v = norm;
+    if (bits > 1)
+      recovered_v *= levels[level_idx];
+    *feedback = input - recovered_v;
+  }
+  return level_idx;
+}
+
+template <>
+inline __device__ unsigned char
+NormWideEncodeValue<__half>(__half input, __half* feedback,
+                            unsigned char* meta_info, unsigned int idx,
+                            int bucket_size, int bits, float rand, void* ctx) {
+  int bucket_no = idx / bucket_size;
+  __half norm = ((__half*)meta_info)[bucket_no];
+  int num_levels = 1 << bits;
+  __half* levels = (__half*)ctx;
+  __half d = __hdiv(input, norm);
+  __half rand_fp16 = __float2half(rand);
+  unsigned char level_idx = 0;
+  // levels are going 1.0 q_n q_{n-1} ... 0.0(or -1.0)
+  while (level_idx + 1 < num_levels) {
+    if (__hgt(__hsub(d, levels[level_idx + 1]), (__half)EPS)) {
+      __half diff =
+          __hmul(__hsub(levels[level_idx], levels[level_idx + 1]), rand_fp16);
+      if (__hlt(__hsub(__hadd(d, diff), levels[level_idx]), (__half)(-EPS))) {
+        level_idx++;
+      }
+      break;
+    }
+    level_idx++;
+  }
+  // update error feedback
+  if (feedback) {
+    __half recovered_v = norm;
+    if (bits > 1)
+      recovered_v = __hmul(recovered_v, levels[level_idx]);
+    *feedback = __hsub(input, recovered_v);
+  }
+  return level_idx;
+}
+
+template <typename T>
+inline __device__ T NormWideDecodeValue(unsigned char input,
+                                        unsigned char* meta_info,
+                                        unsigned int idx, int bucket_size,
+                                        int bits, void* ctx) {
+  int bucket_no = idx / bucket_size;
+  T norm = ((T*)meta_info)[bucket_no];
+  T* levels = (float*)ctx;
+  T decode_value = norm;
+  if (bits > 1) {
+    decode_value *= levels[input];
+  }
+  return decode_value;
+}
+
+template <>
+inline __device__ __half NormWideDecodeValue<__half>(unsigned char input,
+                                                     unsigned char* meta_info,
+                                                     unsigned int idx,
+                                                     int bucket_size, int bits,
+                                                     void* ctx) {
+  int bucket_no = idx / bucket_size;
+  __half norm = ((__half*)meta_info)[bucket_no];
+  __half* levels = (__half*)ctx;
+  __half decode_value = norm;
+  if (bits > 1) {
+    decode_value = __hmul(decode_value, levels[input]);
+  }
+  return decode_value;
+}
+
+template <typename T> inline __device__ T single_mult_add(T a, T b, T c) {
+  return a * b + c;
+}
+
+template <>
+inline __device__ __half single_mult_add<__half>(__half a, __half b, __half c) {
+  return __hadd(__hmul(a, b), c);
+}
+
+// Packaging functions
+#define PACK_ARRAY_FUNC(type)                                                  \
+  template <typename T>                                                        \
+  __global__ void PackArray##type(T* input, unsigned char* meta_info,          \
+                                  unsigned char* output, T* feedback,          \
+                                  int num_elems, int bucket_size, int bits,    \
+                                  void* ctx, CurandState* states) {            \
+    unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;                  \
+    unsigned int stride = gridDim.x * blockDim.x;                              \
+    int num_char = (bits * num_elems + PACK_SIZE - 1) / PACK_SIZE;             \
+    T* feedback_ = nullptr;                                                    \
+    CurandState local_state = states[tid];                                     \
+    float rand;                                                                \
+    for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;    \
+         i += stride) {                                                        \
+      uint64_t value = 0;                                                      \
+      _Pragma("unroll 4") for (unsigned int j = 0;                             \
+                               j < PACK_SIZE && i * PACK_SIZE + j < num_elems; \
+                               j++) {                                          \
+        int idx = i * PACK_SIZE + j;                                           \
+        if (feedback)                                                          \
+          feedback_ = feedback + idx;                                          \
+        rand = GetRand(&local_state);                                          \
+        uint64_t encoded =                                                     \
+            type##EncodeValue<T>(input[idx], feedback_, meta_info, idx,        \
+                                 bucket_size, bits, rand, ctx);                \
+        value += (encoded << (j * bits));                                      \
+      }                                                                        \
+      for (unsigned int j = 0; j < bits && i * bits + j < num_char; j++) {     \
+        output[i * bits + j] = value >> (PACK_SIZE * j) & 0xFF;                \
+      }                                                                        \
+    }                                                                          \
+    states[tid] = local_state;                                                 \
+  }
+
+#define UNPACK_ARRAY_FUNC(type)                                                \
+  template <typename T>                                                        \
+  __global__ void UnpackArray##type(                                           \
+      unsigned char* input, unsigned char* meta_info, T* output,               \
+      int num_elems, int bucket_size, int bits, void* ctx, bool add) {         \
+    unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;                  \
+    unsigned int stride = gridDim.x * blockDim.x;                              \
+    int num_char = (bits * num_elems + PACK_SIZE - 1) / PACK_SIZE;             \
+    unsigned int divisor = 1 << bits;                                          \
+    T add_t = (T)add;                                                          \
+    for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;    \
+         i += stride) {                                                        \
+      uint64_t value = 0;                                                      \
+      for (int j = 0; j < bits && i * bits + j < num_char; j++) {              \
+        value |= ((uint64_t)input[i * bits + j]) << (j * PACK_SIZE);           \
+      }                                                                        \
+      _Pragma("unroll 4") for (int j = 0;                                      \
+                               j < PACK_SIZE && i * PACK_SIZE + j < num_elems; \
+                               j++) {                                          \
+        unsigned char encoded_value = (value >> (j * bits)) & (divisor - 1);   \
+        T d = type##DecodeValue<T>(encoded_value, meta_info,                   \
+                                   i * PACK_SIZE + j, bucket_size, bits, ctx); \
+        output[i * PACK_SIZE + j] =                                            \
+            single_mult_add(add_t, output[i * PACK_SIZE + j], d);              \
+      }                                                                        \
+    }                                                                          \
+  }
+
+PACK_ARRAY_FUNC(MaxMin)
+UNPACK_ARRAY_FUNC(MaxMin)
+PACK_ARRAY_FUNC(NormPos)
+UNPACK_ARRAY_FUNC(NormPos)
+PACK_ARRAY_FUNC(NormWide)
+UNPACK_ARRAY_FUNC(NormWide)
+
+/*
+ * Quantization handles.
+ */
 __global__ void _quantize_maxmin(unsigned char* y, const float* x,
-                                 const float* maxandmin, const int n, int bits,
-                                 int bucket_size, CurandState* states) {
+                                 const float* maxandmin, float* feedback,
+                                 const int n, int bits, int bucket_size,
+                                 CurandState* states) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
 
@@ -182,13 +588,16 @@ __global__ void _quantize_maxmin(unsigned char* y, const float* x,
       int my_bucket = (i * parts + j) / bucket_size;
       float unit = (maxandmin[my_bucket * 2] - maxandmin[my_bucket * 2 + 1]) /
                    (divisor - 1);
-      float d = (x[i * parts + j] - maxandmin[my_bucket * 2 + 1]) / unit
-                //               + (curand(&local_state) % 100001) / 100000.0;
-//                                 + curand_uniform(&local_state);
-                + HybridTaus(&local_state);
-      a += ((int)floor(d)) << (j * bits);
+      float d = (x[i * parts + j] - maxandmin[my_bucket * 2 + 1]) / unit +
+                GetRand(&local_state);
+      int level = (int)floor(d);
+      a += level << (j * bits);
+      if (feedback) {
+        feedback[i * parts + j] =
+            x[i * parts + j] - (maxandmin[2 * my_bucket + 1] + level * unit);
+      }
     }
-    y[i] = (unsigned char) a;
+    y[i] = (unsigned char)a;
   }
   states[index] = local_state;
 }
@@ -211,313 +620,113 @@ __global__ void _dequantize_maxmin(const unsigned char* y,
   }
 }
 
-
-// Normalize each value and encode it with quantization points.
-// Encoding is performed with bits - 1, levels must be prepared in advance.
-// One bit per encoded value is used for signs.
-__global__ void _quantize_Linf_normalized(unsigned char *y, const float* x,
-                                          const float* norm, const float* levels,
-                                          int n, int bits, int bucket_size,
-                                          CurandState* states) {
-  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-  unsigned int stride = gridDim.x * blockDim.x;
-
-  CurandState local_state;
-  local_state = states[index];
-  int parts = 8 / bits;
-  unsigned char num_levels = 1 << (bits - 1);
-  for (int i = index; i < (n + parts - 1) / parts; i += stride) {
-    int a = 0;
-    for (int j = 0; j < parts && i * parts + j < n; j++) {
-      int my_bucket = (i * parts + j) / bucket_size;
-      float rand =
-//          curand_uniform(&local_state);
-          HybridTaus(&local_state);
-
-      float d = x[i * parts + j] / norm[my_bucket];
-      char sign = (d < -EPS);
-      d = fabsf(d);
-      unsigned char level_idx = 0;
-      while (level_idx + 1 < num_levels) {
-        if (d - levels[level_idx + 1] < EPS) {
-          if (d + (levels[level_idx + 1] - levels[level_idx]) * rand - levels[level_idx + 1] > EPS) {
-            level_idx++;
-          }
-          break;
-        }
-        level_idx++;
-      }
-      level_idx |= (sign << (bits - 1));
-      a += (level_idx << (j * bits));
-    }
-    y[i] = (unsigned char)a;
-  }
-  states[index] = local_state;
+#define MaxminQuantizeImpl(type_name, T)                                       \
+void CUDA_quantize_maxmin_##type_name(unsigned char* input_data,              \
+                          unsigned char* output_data,                          \
+                          unsigned char* feedback_data,                        \
+                          int num_elems, int bits,                             \
+                          int bucket_size, CurandState* states,                \
+                          cudaStream_t stream) {                               \
+  T* input = (T*)input_data;                                                   \
+  unsigned char* meta_info = output_data;                                      \
+  T* feedback = (T*)feedback_data;                                             \
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;               \
+  unsigned char* output = output_data + 2 * sizeof(T) * num_buckets;           \
+  MaxMin_find_meta<T>                                                          \
+      <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(      \
+          input, meta_info, num_elems, bucket_size, bits);                     \
+  CUDA_CHECK(cudaGetLastError());                                              \
+  PackArrayMaxMin<T>                                                           \
+      <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(      \
+          input, meta_info, output, feedback, num_elems, bucket_size, bits,    \
+          NULL, states);                                                       \
+  CUDA_CHECK(cudaGetLastError());                                              \
 }
 
-__global__ void _dequantize_Linf_normalized(const unsigned char *y, const float *norms,
-                                            const float *levels, float *x, const int n,
-                                            int bits, int bucket_size) {
-  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-  unsigned int stride = gridDim.x * blockDim.x;
-
-  int parts = 8 / bits;
-  int divisor = 1 << bits;
-
-  for (int i = index; i < n; i += stride) {
-    int my_bucket = i / bucket_size;
-    unsigned char encoded_value =
-        (y[i / parts] >> ((i % parts) * bits)) & (divisor - 1);
-    char sign = (encoded_value & (1 << (bits - 1))) ? -1 : 1;
-    encoded_value &= (1 << (bits - 1)) - 1;
-    if (bits == 1)
-      x[i] = norms[my_bucket] * sign;
-    else
-      x[i] = levels[encoded_value] * norms[my_bucket] * sign;
-  }
-}
-
-__global__ void _quantize_L2_normalized_nonaligned(unsigned char *y, const float* x,
-                                        const float* norm, const unsigned char *max_logs, const float* levels,
-                                        int n, int bits, int bucket_size,
-                                        CurandState* states) {
-  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-  unsigned int stride = gridDim.x * blockDim.x;
-
-  CurandState local_state;
-  local_state = states[index];
-
-  unsigned char num_levels = 1 << (bits - 1);
-  int parts = 8;
-  for (int i = index; i < (n + parts - 1) / parts; i += stride) {
-    long a = 0;
-    for (int j = 0; j < parts && (i * parts + j) < n; j++) {
-      int my_bucket = (i * parts + j) / bucket_size;
-      float rand =
-//          curand_uniform(&local_state);
-              HybridTaus(&local_state);
-      float d = x[i * parts + j] / norm[my_bucket];
-      char sign = (d < -EPS);
-      d = fabsf(d);
-      unsigned long level_idx = 0;
-      unsigned char offset = max_logs[my_bucket] + num_levels - 1;
-
-      while (level_idx + 1 < num_levels) {
-        if (d - levels[offset - (level_idx + 1)] < EPS) {
-          if (d + (levels[offset - (level_idx + 1)] - levels[offset - level_idx]) * rand - levels[offset - (level_idx + 1)] > EPS) {
-            level_idx++;
-          }
-          break;
-        }
-        level_idx++;
-      }
-      level_idx |= (sign << (bits - 1));
-      a += level_idx << (bits * j);
-    }
-
-    for (int j = 0; j < bits; j++) {
-      y[i * bits + j] = a >> ((8 * j)) & 0xFF;
-    }
-  }
-  states[index] = local_state;
+#define MaxminDequantizeImpl(type_name, T)                                     \
+void CUDA_dequantize_maxmin_##type_name(unsigned char* input_data,             \
+                            unsigned char* output_data, int num_elems,         \
+                            int bits, int bucket_size, bool add,               \
+                            cudaStream_t stream) {                             \
+  T* output = (T*)output_data;                                                 \
+  unsigned char* meta_info = input_data;                                       \
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;               \
+  unsigned char* input = input_data + 2 * sizeof(T) * num_buckets;             \
+  UnpackArrayMaxMin<T>                                                         \
+      <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(      \
+          input, meta_info, output, num_elems, bucket_size, bits, NULL, add);  \
+  CUDA_CHECK(cudaGetLastError());                                              \
 }
 
 
-__global__ void _dequantize_L2_normalized_nonaligned(const unsigned char *y, const float *norms, const unsigned char *max_logs,
-                                          const float *levels, float *x, int n,
-                                          int bits, int bucket_size) {
-  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-  unsigned int stride = gridDim.x * blockDim.x;
-
-  int parts = 8;
-  int divisor = 1 << bits;
-  int num_levels = 1 << (bits - 1);
-  for (int i = index; i < (n + parts - 1) / parts; i += stride) {
-    long a = 0;
-    for (int j = 0; j < bits && (i * bits + j) < n; j++){
-      a |= (y[i * bits + j] << (j * 8));
-    }
-
-    for (int j = 0; j < parts; j++) {
-      int my_bucket = (i * parts + j) / bucket_size;
-      unsigned char offset = num_levels + max_logs[my_bucket] - 1;
-      unsigned char encoded_value =
-          (a >> (j  * bits)) & (divisor - 1);
-      char sign = (encoded_value & (1 << (bits - 1))) ? -1 : 1;
-      encoded_value &= (1 << (bits - 1)) - 1;
-      float qp = (encoded_value == 0) ? 0.0: levels[offset - encoded_value];
-      x[i * parts + j] = qp * norms[my_bucket] * sign;
-    }
-  }
+#define NormQuantizeImpl(type_name, T)                                         \
+void CUDA_quantize_Norm_##type_name(                                           \
+    unsigned char* input_data, unsigned char* output_data,                     \
+    unsigned char* feedback, T* levels, int num_elems, int bits,               \
+    int bucket_size, CurandState* states, horovod::common::NormType norm_type, \
+    horovod::common::LevelsType levels_type, cudaStream_t stream) {            \
+  T* input = (T*)input_data;                                                   \
+  unsigned char* meta_info = output_data;                                      \
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;               \
+  unsigned char* output = output_data + sizeof(T) * num_buckets;               \
+  if (norm_type == horovod::common::NormType::L2) {                            \
+    L2Norm_find_meta<T>                                                        \
+        <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(    \
+            input, meta_info, num_elems, bucket_size);                         \
+  } else if (norm_type == horovod::common::NormType::Linf) {                   \
+    LinfNorm_find_meta<T>                                                      \
+        <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(    \
+            input, meta_info, num_elems, bucket_size);                         \
+  }                                                                            \
+  CUDA_CHECK(cudaGetLastError());                                              \
+  if (levels_type == horovod::common::LevelsType::Wide) {                      \
+    PackArrayNormWide<T>                                                       \
+        <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(    \
+            input, meta_info, output, (T*)feedback, num_elems, bucket_size,    \
+            bits, (void*)levels, states);                                      \
+  } else {                                                                     \
+    PackArrayNormPos<T>                                                        \
+        <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(    \
+            input, meta_info, output, (T*)feedback, num_elems, bucket_size,    \
+            bits, (void*)levels, states);                                      \
+  }                                                                            \
+  CUDA_CHECK(cudaGetLastError());                                              \
 }
 
-
-__global__ void _quantize_L2_normalized(unsigned char *y, const float* x,
-                                          const float* norm, const unsigned char *max_logs,
-                                          const float* levels,
-                                          int n, int bits, int bucket_size,
-                                          CurandState* states) {
-  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-  unsigned int stride = gridDim.x * blockDim.x;
-
-  CurandState local_state;
-  local_state = states[index];
-  int parts = 8 / bits;
-  unsigned char num_levels = 1 << (bits - 1);
-  for (int i = index; i < (n + parts - 1) / parts; i += stride) {
-    int a = 0;
-    for (int j = 0; j < parts && i * parts + j < n; j++) {
-      int my_bucket = (i * parts + j) / bucket_size;
-      float rand =
-//              curand_uniform(&local_state);
-              HybridTaus(&local_state);
-      float d = x[i * parts + j] / norm[my_bucket];
-      char sign = (d < -EPS);
-      d = fabsf(d);
-      unsigned char level_idx = 0;
-      unsigned char offset = max_logs[my_bucket] + num_levels - 1;
-
-      while (level_idx + 1 < num_levels) {
-        if (d - levels[offset - (level_idx + 1)] < EPS) {
-          if (d + (levels[offset - (level_idx + 1)] - levels[offset - level_idx]) * rand - levels[offset - (level_idx + 1)] > EPS) {
-            level_idx++;
-          }
-          break;
-        }
-        level_idx++;
-      }
-      level_idx |= (sign << (bits - 1));
-      a += (level_idx << (j * bits));
-    }
-    y[i] = (unsigned char)a;
-  }
-  states[index] = local_state;
+#define NormDequantizeImpl(type_name, T)                                       \
+void CUDA_dequantize_Norm_##type_name(unsigned char* input_data,               \
+                                      unsigned char* output_data, T* levels,   \
+                                      int num_elems, int bits, int bucket_size,\
+                                      horovod::common::LevelsType levels_type, \
+                                      bool add, cudaStream_t stream) {         \
+  T* output = (T*)output_data;                                                 \
+  unsigned char* meta_info = input_data;                                       \
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;               \
+  unsigned char* input = input_data + sizeof(T) * num_buckets;                 \
+  if (levels_type == horovod::common::LevelsType::Wide) {                      \
+    UnpackArrayNormWide<T>                                                     \
+        <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(    \
+            input, meta_info, output, num_elems, bucket_size, bits,            \
+            (void*)levels, add);                                               \
+  } else {                                                                     \
+    UnpackArrayNormPos<T>                                                      \
+        <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(    \
+            input, meta_info, output, num_elems, bucket_size, bits,            \
+            (void*)levels, add);                                               \
+  }                                                                            \
+  CUDA_CHECK(cudaGetLastError());                                              \
 }
 
+MaxminQuantizeImpl(fp32, float)
+MaxminQuantizeImpl(fp16, Half)
+MaxminDequantizeImpl(fp32, float)
+MaxminDequantizeImpl(fp16, Half)
+NormQuantizeImpl(fp32, float)
+NormQuantizeImpl(fp16, Half)
+NormDequantizeImpl(fp32, float)
+NormDequantizeImpl(fp16, Half)
 
-__global__ void _dequantize_L2_normalized(const unsigned char *y, const float *norms, const unsigned char *max_logs,
-                                          const float *levels, float *x, int n,
-                                          int bits, int bucket_size) {
-  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-  unsigned int stride = gridDim.x * blockDim.x;
-
-  int parts = 8 / bits;
-  int divisor = 1 << bits;
-  int num_levels = 1 << (bits - 1);
-  for (int i = index; i < n; i += stride) {
-    int my_bucket = i / bucket_size;
-    unsigned char offset = num_levels + max_logs[my_bucket] - 1;
-    unsigned char encoded_value =
-            (y[i / parts] >> ((i % parts) * bits)) & (divisor - 1);
-    char sign = (encoded_value & (1 << (bits - 1))) ? -1 : 1;
-    encoded_value &= (1 << (bits - 1)) - 1;
-    float qp = (encoded_value == 0) ? 0.0: levels[offset - encoded_value];
-    x[i] = qp * norms[my_bucket] * sign;
-  }
-}
-
-
-void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
-                      cudaStream_t stream) {
-  _init_curand<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(
-      seed, states);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-int CUDA_get_curand_array_size(int num_elems) {
-  return BLOCKS_PER_GRID(num_elems) * MAX_THREADS_PER_BLOCK * sizeof(CurandState);
-}
-
-void CUDA_add(int n, const float* x, float* y, float* sum, cudaStream_t stream) {
-  int blocks = 512;
-  int num_threads = MAX_THREADS_PER_BLOCK;
-  _add<<<blocks, num_threads, 0, stream>>>(n, x, y, sum);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-void CUDA_diff(int n, const float* x, const float* y, float* z, cudaStream_t stream) {
-  _diff<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(n, x, y, z);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-void CUDA_find_max_and_min_bucket(const float* x, float* maxandmin, int n,
-                                  int bucket_size, cudaStream_t stream) {
-  _find_max_and_min_bucket_seq<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0,
-                                 stream>>>(x, maxandmin, n, bucket_size);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-void CUDA_find_norms_bucket(const float* x, float* max, float* norm, int n,
-                            int bucket_size, cudaStream_t stream) {
-  _find_norms_bucket_seq<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(
-          x, max, norm, n, bucket_size);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-void CUDA_find_Linf_bucket(const float* x, float* maxs, int n, int bucket_size,
-                           cudaStream_t stream) {
-  _find_Linf_bucket_seq<<< BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream >> > (
-          x, maxs, n, bucket_size);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-void CUDA_find_L2_and_max_log_bucket(const float* x, float* norm, unsigned char* max_log, float rev_multiplier, int n,
-                                     int bucket_size, cudaStream_t stream){
-  _find_L2_max_log_bucket_seq<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(
-          x, norm, max_log, rev_multiplier, n, bucket_size);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-void CUDA_quantize_maxmin(unsigned char* y, const float* x,
-                          const float* maxandmin, int n, int bits,
-                          int bucket_size, CurandState* states,
-                          cudaStream_t stream) {
-  _quantize_maxmin<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(
-          y, x, maxandmin, n, bits, bucket_size, states);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-void CUDA_dequantize_maxmin(const unsigned char* y, const float* maxandmin,
-                            float* x, int n, int bits, int bucket_size,
-                            cudaStream_t stream) {
-  _dequantize_maxmin<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(
-          y, maxandmin, x, n, bits, bucket_size);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-}
-
-void CUDA_Linf_normalized_quantize_values(unsigned char* y, const float* x,
-                                          const float* norms, const float* levels,
-                                          int n, int bits, int bucket_size,
-                                          CurandState* states, cudaStream_t stream) {
-  _quantize_Linf_normalized<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>> (
-          y, x, norms, levels, n, bits, bucket_size, states);
-  cudaStreamSynchronize(stream);
-}
-
-void CUDA_L2_normalized_quantize_values(unsigned char* y, const float* x,
-                                          const float* norms, const unsigned char *max_logs,
-                                          const float* levels,
-                                          int n, int bits, int bucket_size,
-                                          CurandState* states, cudaStream_t stream) {
-  _quantize_L2_normalized<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(
-          y, x, norms, max_logs, levels, n, bits, bucket_size, states);
-  cudaStreamSynchronize(stream);
-}
-
-void CUDA_Linf_normalized_dequantize_values(const unsigned char *y,
-                                            const float *norms, const float *levels,
-                                            float *x, int n, int bits,
-                                            int bucket_size, cudaStream_t stream) {
-  _dequantize_Linf_normalized<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream >> > (
-      y, norms, levels, x, n, bits, bucket_size);
-  cudaStreamSynchronize(stream);
-}
-
-void CUDA_L2_normalized_dequantize_values(const unsigned char *y, const float* norms,
-                                          const unsigned char *max_logs, const float* levels,
-                                          float *x, int n, int bits,
-                                          int bucket_size, cudaStream_t stream) {
-  _dequantize_L2_normalized<<<BLOCKS_PER_GRID(n), MAX_THREADS_PER_BLOCK, 0, stream>>>(
-          y, norms, max_logs, levels, x, n, bits, bucket_size);
-  cudaStreamSynchronize(stream);
+void CUDA_convert_to_halves(float* input, Half* output, int numel) {
+  float2half<<<numel, 1, 0, 0>>>(input, output, numel);
+  assert(cudaStreamSynchronize(0) == cudaSuccess);
 }
