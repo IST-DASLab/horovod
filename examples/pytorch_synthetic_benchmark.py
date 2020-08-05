@@ -36,23 +36,26 @@ parser.add_argument('--use-amp', action='store_true', default=False,
                     help='use mixed precision training')
 parser.add_argument('--use-apex', action='store_true', default=False,
                     help='use apex')
+parser.add_argument('--use-hvd', action='store_true', default=False,
+                    help='use apex')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
-if args.local_rank < 0 and not args.use_apex:
+if args.use_hvd:
     import horovod.torch as hvd
     hvd.init()
-    use_apex_dist=False
 else:
-    from apex.parallel import DistributedDataParallel
     from apex import amp
     dist.init_process_group(backend='nccl', init_method='env://')
-    use_apex_dist=True
+
+if args.use_apex:
+    from apex.parallel import DistributedDataParallel
 
 if args.use_amp:
     from apex import amp
-if use_apex_dist:
+
+if not args.use_hvd:
     rank = args.local_rank
     world_size = dist.get_world_size()
 else:
@@ -82,7 +85,7 @@ optimizer = optim.SGD(model.parameters(), lr=0.01)
 
 
 # Horovod: wrap optimizer with DistributedOptimizer.
-if not use_apex_dist:
+if args.use_hvd and not args.use_apex:
     # Horovod: (optional) compression algorithm.
     compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
     optimizer = hvd.DistributedOptimizer(optimizer,
@@ -94,11 +97,14 @@ if not use_apex_dist:
     hvd.broadcast_parameters(model.state_dict(), root_rank=0)
     hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
-if args.use_amp or use_apex_dist:
+if args.use_amp:
     model, optimizer = amp.initialize(model, optimizer, opt_level="O2")
 
-if use_apex_dist:
-    model = DistributedDataParallel(model, num_allreduce_streams=4, fake_comp_ratio=1.0)
+if args.use_apex:
+    if args.use_hvd:
+        model = DistributedDataParallel(model, hvd_dist=True, allreduce_always_fp32=True)
+    else:
+        model = DistributedDataParallel(model, num_allreduce_streams=4, fake_comp_ratio=1.0)
 
 # Set up fixed fake data
 data = torch.randn(args.batch_size, 3, 224, 224)
@@ -111,7 +117,7 @@ def benchmark_step():
     optimizer.zero_grad()
     output = model(data)
     loss = F.cross_entropy(output, target)
-    if use_apex_dist:
+    if args.use_apex or (args.use_amp and not args.use_hvd):
         with amp.scale_loss(loss, optimizer) as scaled_loss:
             scaled_loss.backward()
         optimizer.step()

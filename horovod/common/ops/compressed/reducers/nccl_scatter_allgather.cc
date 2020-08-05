@@ -118,7 +118,6 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_COMPRESSION,
                               *stream_);
   }
-
   send_buf = gradients_send_;
   NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart());
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
@@ -126,10 +125,10 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
       continue;
     }
     send_compressed_size = send_sizes.front();
-    NCCL_CALL_CHECK("ncclRecv",
-                    ncclRecv(recv_buf, recv_compressed_size, ncclChar, node_rank, *comm, *stream_));
-    NCCL_CALL_CHECK("ncclSend",
-                    ncclSend(send_buf, send_compressed_size, ncclChar, node_rank, *comm, *stream_));
+    NCCL_CALL_CHECK("ncclRecv", ncclRecv(recv_buf, recv_compressed_size,
+                                         ncclChar, node_rank, *comm, *stream_));
+    NCCL_CALL_CHECK("ncclSend", ncclSend(send_buf, send_compressed_size,
+                                         ncclChar, node_rank, *comm, *stream_));
     recv_buf += recv_compressed_size;
     send_buf += send_compressed_size;
     send_sizes.pop();
@@ -157,7 +156,7 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
   }
 
   recv_buf = gradients_recv_;
-  // second round of MPI communication. receive the sums from other nodes
+  // second round of communication. receive the sums from other nodes
   send_compressed_size = recv_compressed_size;
   NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart());
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
@@ -171,8 +170,10 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
         round_to(compressor_->BufferSize(recv_num_elems, entries,
                                          their_start_offset, global_offset),
                  ALIGNMENT_UNIT);
-    NCCL_CALL_CHECK("ncclRecv", ncclRecv(recv_buf, recv_compressed_size, ncclChar, node_rank, *comm, *stream_));
-    NCCL_CALL_CHECK("ncclSend", ncclSend(gradients_send_, send_compressed_size, ncclChar, node_rank, *comm, *stream_));
+    NCCL_CALL_CHECK("ncclRecv", ncclRecv(recv_buf, recv_compressed_size,
+                                         ncclChar, node_rank, *comm, *stream_));
+    NCCL_CALL_CHECK("ncclSend", ncclSend(gradients_send_, send_compressed_size,
+                                         ncclChar, node_rank, *comm, *stream_));
     recv_buf += recv_compressed_size;
   }
   NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd());

@@ -49,13 +49,13 @@ inline __device__ xorshift128p_state xorshift128_init(uint64_t seed) {
   return result;
 }
 
-__global__ void _init_curand(unsigned int seed, xorshift128p_state* states) {
+__global__ void _init_curand(unsigned int seed, CurandState* states) {
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-  //  unsigned char z[4];
-  //  for (int i = 0; i < 4; i++)
-  //    z[i] = 128 + index % 128;
-  //  states[index] = toInt(z);
-  states[index] = xorshift128_init(seed * index);
+    unsigned char z[4];
+    for (int i = 0; i < 4; i++)
+      z[i] = (seed + index) % 128;
+    states[index] = toInt(z);
+//  states[index] = xorshift128_init(seed * index);
 }
 
 inline __device__ float xorshift128p(xorshift128p_state* state) {
@@ -70,8 +70,8 @@ inline __device__ float xorshift128p(xorshift128p_state* state) {
 }
 
 __device__ float GetRand(CurandState* state_p) {
-  return ((float)xorshift128p(state_p)) / UINT64_MAX;
-  //  return HybridTaus(state_p);
+//  return ((float)xorshift128p(state_p)) / UINT64_MAX;
+    return HybridTaus(state_p);
 }
 
 void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,

@@ -65,7 +65,8 @@ def customize_compiler_for_nvcc(self):
             self.set_executable('compiler_so', ['nvcc'])
             # use only a subset of the extra_postargs, which are 1-1 translated
             # from the extra_compile_args in the Extension class
-            postargs = ['-c', '-std=c++11', '-x=cu', '-arch=sm_75',
+            postargs = ['-c', '-std=c++11', '-x=cu', '--generate-code', 'arch=compute_75,code=sm_75',
+                        '--generate-code', 'arch=compute_70,code=sm_70',
                         '--ptxas-options=-v', '--compiler-options','-fPIC'] + extra_postargs[17:20]
         else:
             postargs = extra_postargs

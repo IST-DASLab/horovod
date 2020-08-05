@@ -14,8 +14,8 @@ struct xorshift128p_state {
   uint64_t a, b;
 };
 
-//#define CurandState int
-#define CurandState xorshift128p_state
+#define CurandState int
+//#define CurandState xorshift128p_state
 
 int CUDA_get_curand_array_size(int num_elems);
 void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
