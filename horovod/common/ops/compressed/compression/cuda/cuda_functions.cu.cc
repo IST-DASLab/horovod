@@ -324,7 +324,7 @@ __global__ void LinfNorm_find_meta_parallel(const T* input, unsigned char* meta,
   __shared__ T sdata[MAX_THREADS_PER_BLOCK];
   for (unsigned int bucket_idx = bid; bucket_idx < num_buckets;
        bucket_idx += bstride) {
-    norm[bucket_idx] = input[bucket_idx * bucket_size];
+    norm[bucket_idx] = fabsf(input[bucket_idx * bucket_size]);
     unsigned int num_elems_in_bucket =
         umin(n - bucket_idx * bucket_size, bucket_size);
     unsigned int num_iters_per_bucket =
@@ -332,13 +332,13 @@ __global__ void LinfNorm_find_meta_parallel(const T* input, unsigned char* meta,
     for (int i = 0; i < num_iters_per_bucket; i++) {
       unsigned int idx = bucket_size * bucket_idx + i * blockDim.x + tid;
       if (idx < n) {
-        sdata[tid] = input[idx];
+        sdata[tid] = fabsf(input[idx]);
       }
       __syncthreads();
 
       for (unsigned int s = bucket_size / 2; s > 0; s >>= 1) {
         if (tid < s && idx + s < n && tid + s < blockDim.x) {
-          sdata[tid] = fmaxf(fabs(sdata[tid + s]), fabs(sdata[tid]));
+          sdata[tid] = fmaxf(sdata[tid + s], sdata[tid]);
         }
         __syncthreads();
       }
@@ -410,7 +410,7 @@ __global__ void L2Norm_find_meta_parallel(const T* input, unsigned char* meta,
   __shared__ T sdata[MAX_THREADS_PER_BLOCK];
   for (unsigned int bucket_idx = bid; bucket_idx < num_buckets;
        bucket_idx += bstride) {
-    norm[bucket_idx] = input[bucket_idx * bucket_size];
+    norm[bucket_idx] = (T)0.0;
     unsigned int num_elems_in_bucket =
         umin(n - bucket_idx * bucket_size, bucket_size);
     unsigned int num_iters_per_bucket =
@@ -455,7 +455,7 @@ __global__ void L2Norm_find_meta_parallel<__half>(const __half* input,
   __shared__ __half sdata[MAX_THREADS_PER_BLOCK];
   for (unsigned int bucket_idx = bid; bucket_idx < num_buckets;
        bucket_idx += bstride) {
-    norm[bucket_idx] = input[bucket_idx * bucket_size];
+    norm[bucket_idx] = (__half) 0.0;
     unsigned int num_elems_in_bucket =
         umin(n - bucket_idx * bucket_size, bucket_size);
     unsigned int num_iters_per_bucket =
@@ -493,7 +493,7 @@ MaxMinEncodeValue(T input, T* feedback, unsigned char* meta_info,
                   void* ctx) {
   int bucket_no = idx / bucket_size;
   T* maxmin = ((T*)meta_info) + 2 * bucket_no;
-  if (maxmin[0] - maxmin[1] < EPS) {
+  if (maxmin[0] < EPS) {
     return 0;
   }
   T min = maxmin[1];
@@ -512,7 +512,7 @@ MaxMinEncodeValue<__half>(__half input, __half* feedback,
                           int bucket_size, int bits, float rand, void* ctx) {
   int bucket_no = idx / bucket_size;
   __half* maxmin = ((__half*)meta_info) + 2 * bucket_no;
-  if (__hle(__hsub(maxmin[0], maxmin[1]), (__half)EPS)) {
+  if (__hle(maxmin[0], (__half)EPS)) {
     return 0;
   }
   __half rand_fp16 = __float2half(rand);
@@ -675,11 +675,9 @@ NormWideEncodeValue(T input, T* feedback, unsigned char* meta_info,
   T* levels = (T*)ctx;
   T d = input / norm;
   unsigned char level_idx = 0;
-  unsigned char flevel = 0;
   // levels are going 1.0 q_n q_{n-1} ... 0.0(or -1.0)
   while (level_idx + 1 < num_levels) {
     if (d - levels[level_idx + 1] > EPS) {
-      flevel = level_idx;
       if (d + (levels[level_idx] - levels[level_idx + 1]) * rand -
               levels[level_idx] <
           -EPS) {

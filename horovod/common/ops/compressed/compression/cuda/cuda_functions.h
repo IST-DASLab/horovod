@@ -14,8 +14,8 @@ struct xorshift128p_state {
   uint64_t a, b;
 };
 
-#define CurandState int
-//#define CurandState xorshift128p_state
+//#define CurandState int
+#define CurandState xorshift128p_state
 
 int CUDA_get_curand_array_size(int num_elems);
 void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
@@ -56,6 +56,7 @@ void CUDA_quantize_Norm_fp16(
     unsigned char* feedback, Half* levels, int num_elems, int bits,
     int bucket_size, CurandState* states, horovod::common::NormType norm_type,
     horovod::common::LevelsType level_type, cudaStream_t stream);
+
 void CUDA_dequantize_Norm_fp32(unsigned char* input_data,
                                unsigned char* output_data, float* levels,
                                int num_elems, int bits, int bucket_size,

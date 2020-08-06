@@ -67,6 +67,29 @@ class FP16Compressor(Compressor):
         return tensor_decompressed
 
 
+class FP32Compressor(Compressor):
+    """Decompress all floating 32 gradients to 32-bit."""
+    def compress(self, p, step):
+        """Upcasts the tensor to 32-bit."""
+        if p.requires_grad:
+            tensor = p.grad
+        else:
+            tensor = p
+        tensor_compressed = tensor
+        if tensor.dtype == torch.float16:
+            # Only allow compression from other floating point types
+            tensor_compressed = tensor.type(torch.float32)
+        return tensor_compressed, tensor.dtype
+
+    def decompress(self, tensor, ctx):
+        """Upcasts the tensor to the initialization dtype."""
+        tensor_decompressed = tensor
+        dtype = ctx
+        if dtype.is_floating_point:
+            tensor_decompressed = tensor.type(dtype)
+        return tensor_decompressed
+
+
 class Compression(object):
     """Optional gradient compression algorithm used during allreduce."""
 
@@ -75,3 +98,6 @@ class Compression(object):
 
     """Compress all floating point gradients to 16-bit."""
     fp16 = FP16Compressor()
+
+    """Compress all floating point gradients to 32-bit."""
+    fp32 = FP32Compressor()
