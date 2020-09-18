@@ -1,12 +1,15 @@
 #include "error_feedback.h"
 #include "../../../utils/env_parser.h"
-#include "cuda/cuda_functions.h"
 #include "../utils.h"
+#include "cuda/cuda_functions.h"
+
+#include "../reducers/reducer.h"
 
 namespace horovod {
 namespace common {
 
-ErrorFeedback::ErrorFeedback(Summator* summator) : summator_(summator) {
+ErrorFeedback::ErrorFeedback(Summator* summator, bool do_print)
+    : summator_(summator), do_print_(do_print) {
   SetBoolFromEnv(HOROVOD_COMPRESSION_ERROR_FEEDBACK, enabled_, true);
 }
 
@@ -18,7 +21,8 @@ Status ErrorFeedback::Init(const std::vector<TensorTableEntry>& entries) {
     // TODO: Add timeline callbacks
     status = bufferManager_.InitializeBuffer(
         entry.tensor_name,
-        entry.tensor->shape().num_elements() * get_sizeof(entry.tensor->dtype()),
+        entry.tensor->shape().num_elements() *
+            get_sizeof(entry.tensor->dtype()),
         entry.device, entry.context, [&]() {}, [&]() {});
     if (!status.ok())
       return status;

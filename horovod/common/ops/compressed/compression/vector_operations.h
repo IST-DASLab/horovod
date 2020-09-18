@@ -37,7 +37,6 @@ public:
           ((T*)entries[0].output->data()) + fusion_offset + global_offset;
 
       Add(x, input_data, output_data, num_elems);
-      Finalize();
       return;
     }
 

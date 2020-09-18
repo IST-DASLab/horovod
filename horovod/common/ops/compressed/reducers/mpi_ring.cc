@@ -1,4 +1,4 @@
-#include "ring.h"
+#include "mpi_ring.h"
 #include "../utils.h"
 
 namespace horovod {
@@ -74,7 +74,6 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   // Send to your right neighbor with wrap-around.
   const size_t send_to = (rank + 1) % world_size;
   MPI_Request recv_req;
-  MPI_Status recv_status;
   auto segment_size = [num_elems_per_node, residue](int segment) {
     return num_elems_per_node + ((segment < residue) ? 1 : 0);
   };
@@ -86,7 +85,6 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   int recv_segment_idx, send_segment_idx;
   int64_t buf_send_idx, buf_recv_idx;
   int64_t send_size, recv_size;
-  auto start = clock_::now();
   for (int i = 0; i < world_size - 1; i++) {
     recv_segment_idx = (rank - i - 1 + world_size) % world_size;
     send_segment_idx = (rank - i + world_size) % world_size;
@@ -100,7 +98,6 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
                                          entries, buf_recv_idx, global_offset),
                  ALIGNMENT_UNIT);
 
-    start = clock_::now();
     MPI_CHECK(MPI_Irecv(gradients_recv_, recv_size, MPI_UNSIGNED_CHAR,
                         recv_from, 0, comm, &recv_req));
     send_size =
@@ -113,9 +110,8 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
                        0, comm));
 
     // Wait for recv to complete before reduction
-    MPI_CHECK(MPI_Wait(&recv_req, &recv_status));
+    MPI_CHECK(MPI_Wait(&recv_req, MPI_STATUSES_IGNORE));
 
-    global_state_->communication_time += time_since(start);
 
     compressor_->Decompress(gradients_recv_, entries,
                             buf_recv_idx, global_offset,
@@ -148,12 +144,10 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
                                          entries, buf_recv_idx, global_offset),
                  ALIGNMENT_UNIT);
 
-    start = clock_::now();
     // Segment to recv - at every iteration we receive segment (r-i)
     MPI_CHECK(MPI_Sendrecv(send_buf, send_size, MPI_UNSIGNED_CHAR, send_to, 0, recv_buf,
                            recv_size, MPI_UNSIGNED_CHAR, recv_from, 0, comm,
-                           &recv_status));
-    global_state_->communication_time += time_since(start);
+                           MPI_STATUSES_IGNORE));
     send_buf += send_size;
     recv_buf += recv_size;
     send_size = recv_size;
@@ -175,8 +169,6 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
 
     compressed_buf += recv_size;
   }
-  global_state_->compression_time = compressor_->getCompressionTime();
-  global_state_->meta_info_time = compressor_->getMetaInfoTime();
   return Status::OK();
 }
 

@@ -1,20 +1,20 @@
-#include "all_broadcast.h"
+#include "mpi_allgather.h"
 #include "../utils.h"
 
 namespace horovod {
 namespace common {
 
-MPI_Allreduce_AllBroadcast::MPI_Allreduce_AllBroadcast(
+MPI_Allreduce_AllGather::MPI_Allreduce_AllGather(
     MPIContext* mpi_context, HorovodGlobalState* global_state,
     Compressor* compressor, Summator* summator)
     : MPIReducer(mpi_context, global_state, compressor, summator) {
   if (global_state->controller->GetLocalRank() == 0) {
-    LOG(INFO) << "AllBroadcast";
+    LOG(INFO) << "AllGather";
   }
 }
 
 Status
-MPI_Allreduce_AllBroadcast::Init(const std::vector<TensorTableEntry>& entries) {
+MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
@@ -60,7 +60,7 @@ MPI_Allreduce_AllBroadcast::Init(const std::vector<TensorTableEntry>& entries) {
   return status;
 }
 
-Status MPI_Allreduce_AllBroadcast::AllreduceDivision(
+Status MPI_Allreduce_AllGather::AllreduceDivision(
     int num_elements, MPI_Comm comm, std::vector<TensorTableEntry>& entries,
     int64_t global_offset) {
   int rank = global_state_->controller->GetRank();
@@ -75,7 +75,6 @@ Status MPI_Allreduce_AllBroadcast::AllreduceDivision(
   std::vector<MPI_Request> requests;
   int count = 0;
   timeline.ActivityStartAll(entries, Q_NETWORK);
-  auto start = clock_::now();
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank == rank)
       continue;
@@ -91,7 +90,6 @@ Status MPI_Allreduce_AllBroadcast::AllreduceDivision(
   MPI_CHECK(MPI_Waitall((int)requests.size(), requests.data(), MPI_STATUSES_IGNORE));
   timeline.ActivityEndAll(entries);
   timeline.ActivityStartAll(entries, Q_DECOMPRESSION);
-  global_state_->communication_time += time_since(start);
   compressor_->Decompress(gradients_send_, entries, 0, global_offset,
                           num_elements, false);
   for (int i = 0; i < world_size - 1; i++) {
@@ -100,8 +98,6 @@ Status MPI_Allreduce_AllBroadcast::AllreduceDivision(
   }
   compressor_->Finalize();
   timeline.ActivityEndAll(entries);
-  global_state_->compression_time = compressor_->getCompressionTime();
-  global_state_->meta_info_time = compressor_->getMetaInfoTime();
   return Status::OK();
 }
 

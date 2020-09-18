@@ -54,15 +54,11 @@ public:
 
   virtual void Finalize();
   virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
-  double getMetaInfoTime() const;
-  double getCompressionTime() const;
   virtual void SetQuantizationLevels(float* levels) ;
 protected:
   // The size of the bucket.
   int bucket_size_;
   HorovodGlobalState* global_state_;
-  double meta_info_time_;
-  double compression_time_;
 };
 
 class DummyCompressor : public Compressor {

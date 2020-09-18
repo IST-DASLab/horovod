@@ -104,11 +104,17 @@ Status NCCL_CompressedAllreduce::Execute(
   return gpu_op_context_.FinalizeGPUQueue(entries);
 }
 
+bool NCCL_CompressedAllreduce::EnabledName(const std::string& name) const {
+  return name.find("bias") == std::string::npos;
+}
+
 bool NCCL_CompressedAllreduce::Enabled(
     const ParameterManager& param_manager,
     const std::vector<TensorTableEntry>& entries,
     const Response& response) const {
   if (reducer == nullptr ||
+      NumElements(entries) * sizeof(float) < BUFFER_THRESHOLD ||
+      !EnabledName(entries[0].tensor_name) ||
       !(entries[0].tensor->dtype() == HOROVOD_FLOAT32 ||
         entries[0].tensor->dtype() == HOROVOD_FLOAT16) ||
       entries[0].device == CPU_DEVICE_ID) {

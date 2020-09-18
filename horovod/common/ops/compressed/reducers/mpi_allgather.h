@@ -6,8 +6,8 @@
 namespace horovod {
 namespace common {
 
-struct MPI_Allreduce_AllBroadcast : public MPIReducer {
-  MPI_Allreduce_AllBroadcast(MPIContext* mpi_context,
+struct MPI_Allreduce_AllGather : public MPIReducer {
+  MPI_Allreduce_AllGather(MPIContext* mpi_context,
                              HorovodGlobalState* global_state,
                              Compressor* compressor, Summator* summator);
   Status AllreduceDivision(int num_elements, MPI_Comm comm,

@@ -76,13 +76,15 @@ int CUDA_get_curand_array_size(int num_elems) {
     _add<T><<<blocks, num_threads, 0, stream>>>(n, x, y, sum);                 \
   }
 
-Add_Impl(fp32, float) Add_Impl(fp16, Half)
-    /*
-    ==== Functions for quantization preparation. ===
-    */
-    template <typename T>
-    __global__ void MaxMin_find_meta(const T* input, unsigned char* meta, int n,
-                                     int bucket_size, int bits) {
+Add_Impl(fp32, float)
+
+Add_Impl(fp16, Half)
+/*
+==== Functions for quantization preparation. ===
+*/
+template <typename T>
+__global__ void MaxMin_find_meta(const T* input, unsigned char* meta, int n,
+                                 int bucket_size, int bits) {
   T* maxmin = (T*)meta;
   unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int stride = gridDim.x * blockDim.x;
@@ -455,7 +457,7 @@ __global__ void L2Norm_find_meta_parallel<__half>(const __half* input,
   __shared__ __half sdata[MAX_THREADS_PER_BLOCK];
   for (unsigned int bucket_idx = bid; bucket_idx < num_buckets;
        bucket_idx += bstride) {
-    norm[bucket_idx] = (__half) 0.0;
+    norm[bucket_idx] = (__half)0.0;
     unsigned int num_elems_in_bucket =
         umin(n - bucket_idx * bucket_size, bucket_size);
     unsigned int num_iters_per_bucket =
@@ -810,12 +812,11 @@ inline __device__ __half single_mult_add<__half>(__half a, __half b, __half c) {
   template <typename T>                                                        \
   __global__ void UnpackArray##type(                                           \
       unsigned char* input, unsigned char* meta_info, T* output,               \
-      int num_elems, int bucket_size, int bits, void* ctx, bool add) {         \
+      int num_elems, int bucket_size, int bits, void* ctx, T add_t) {          \
     unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;                  \
     unsigned int stride = gridDim.x * blockDim.x;                              \
     int num_char = (bits * num_elems + PACK_SIZE - 1) / PACK_SIZE;             \
     unsigned int divisor = 1 << bits;                                          \
-    T add_t = (T)add;                                                          \
     for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;    \
          i += stride) {                                                        \
       uint64_t value = 0;                                                      \
@@ -827,9 +828,9 @@ inline __device__ __half single_mult_add<__half>(__half a, __half b, __half c) {
                                j++) {                                          \
         unsigned char encoded_value = (value >> (j * bits)) & (divisor - 1);   \
         T d = type##DecodeValue<T>(encoded_value, meta_info,                   \
-                                   i * PACK_SIZE + j, bucket_size, bits, ctx); \
+                                 i * PACK_SIZE + j, bucket_size, bits, ctx);   \
         output[i * PACK_SIZE + j] =                                            \
-            single_mult_add(add_t, output[i * PACK_SIZE + j], d);              \
+            single_mult_add<T>(add_t, output[i * PACK_SIZE + j], d);           \
       }                                                                        \
     }                                                                          \
   }
@@ -916,10 +917,10 @@ __global__ void _dequantize_maxmin(const unsigned char* y,
              stream>>>(input, meta_info, num_elems, bucket_size, bits);        \
     }                                                                          \
     CUDA_CHECK(cudaGetLastError());                                            \
-    PackArrayMaxMin<T>                                                         \
-        <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(    \
-            input, meta_info, output, feedback, num_elems, bucket_size, bits,  \
-            NULL, states);                                                     \
+    PackArrayMaxMin<T><<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK,    \
+                      0, stream>>>(input, meta_info, output,                   \
+                                            feedback, num_elems, bucket_size,  \
+                                            bits, NULL, states);               \
     CUDA_CHECK(cudaGetLastError());                                            \
   }
 
@@ -931,10 +932,10 @@ __global__ void _dequantize_maxmin(const unsigned char* y,
     unsigned char* meta_info = input_data;                                     \
     int num_buckets = (num_elems + bucket_size - 1) / bucket_size;             \
     unsigned char* input = input_data + 2 * sizeof(T) * num_buckets;           \
-    UnpackArrayMaxMin<T>                                                       \
-        <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(    \
-            input, meta_info, output, num_elems, bucket_size, bits, NULL,      \
-            add);                                                              \
+    T add_t = (T)(add? 1.0: 0.0);                                              \
+    UnpackArrayMaxMin<T><<<BLOCKS_PER_GRID(num_elems),                         \
+    MAX_THREADS_PER_BLOCK, 0, stream>>>(                                       \
+        input, meta_info, output, num_elems, bucket_size, bits, NULL, add_t);  \
     CUDA_CHECK(cudaGetLastError());                                            \
   }
 
@@ -997,27 +998,31 @@ __global__ void _dequantize_maxmin(const unsigned char* y,
     unsigned char* meta_info = input_data;                                     \
     int num_buckets = (num_elems + bucket_size - 1) / bucket_size;             \
     unsigned char* input = input_data + sizeof(T) * num_buckets;               \
+    T add_t = (T)(add? 1.0: 0.0);                                              \
     if (levels_type == horovod::common::LevelsType::Wide) {                    \
       UnpackArrayNormWide<T>                                                   \
           <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(  \
               input, meta_info, output, num_elems, bucket_size, bits,          \
-              (void*)levels, add);                                             \
+              (void*)levels, add_t);                                           \
     } else {                                                                   \
       UnpackArrayNormPos<T>                                                    \
           <<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0, stream>>>(  \
               input, meta_info, output, num_elems, bucket_size, bits,          \
-              (void*)levels, add);                                             \
+              (void*)levels, add_t);                                           \
     }                                                                          \
     CUDA_CHECK(cudaGetLastError());                                            \
   }
 
-MaxminQuantizeImpl(fp32, float) MaxminQuantizeImpl(fp16, Half)
-    MaxminDequantizeImpl(fp32, float) MaxminDequantizeImpl(fp16, Half)
-        NormQuantizeImpl(fp32, float) NormQuantizeImpl(fp16, Half)
-            NormDequantizeImpl(fp32, float) NormDequantizeImpl(fp16, Half)
+MaxminQuantizeImpl(fp32, float)
+MaxminQuantizeImpl(fp16, Half)
+MaxminDequantizeImpl(fp32, float)
+MaxminDequantizeImpl(fp16, Half)
+NormQuantizeImpl(fp32, float)
+NormQuantizeImpl(fp16, Half)
+NormDequantizeImpl(fp32, float)
+NormDequantizeImpl(fp16, Half)
 
-                void CUDA_convert_to_halves(float* input, Half* output,
-                                            int numel) {
+void CUDA_convert_to_halves(float* input, Half* output, int numel) {
   float2half<<<numel, 1, 0, 0>>>(input, output, numel);
   assert(cudaStreamSynchronize(0) == cudaSuccess);
 }

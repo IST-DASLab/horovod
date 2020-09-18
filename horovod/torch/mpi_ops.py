@@ -49,10 +49,6 @@ ddl_built = _basics.ddl_built
 ccl_built = _basics.ccl_built
 cuda_built = _basics.cuda_built
 rocm_built = _basics.rocm_built
-allreduce_time = _basics.allreduce_time
-communication_time = _basics.communication_time
-compression_time = _basics.compression_time
-meta_info_time = _basics.meta_info_time
 set_quantization_levels = _basics.set_quantization_levels
 
 def shutdown(*args, **kwargs):
@@ -162,7 +158,7 @@ def allreduce_async(tensor, average=None, name=None, op=None,
         `synchronize()`.
     """
     op = handle_average_backwards_compatibility(op, average)
-    output = tensor.new(tensor.shape)
+    output = torch.zeros_like(tensor)
     return _allreduce_async(tensor, output, name, op, prescale_factor, postscale_factor)
 
 

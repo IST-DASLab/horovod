@@ -94,7 +94,6 @@ int64_t GPUMaxMinQuantizer::Compress(unsigned char* input,
                                      unsigned char* output,
                                      unsigned char* feedback, int64_t num_elems,
                                      DataType dtype) {
-  auto start = clock_::now();
   if (dtype != DataType::HOROVOD_FLOAT16) {
     CUDA_quantize_maxmin_fp32(
         input, output, feedback, num_elems, bits_, bucket_size_,
@@ -106,14 +105,12 @@ int64_t GPUMaxMinQuantizer::Compress(unsigned char* input,
         gpu_compression_context_->cuda_states_,
         *gpu_compression_context_->stream_);
   }
-  compression_time_ += time_since(start);
   return BufferSize(num_elems, dtype);
 }
 
 void GPUMaxMinQuantizer::Decompress(unsigned char* input, unsigned char* output,
                                     int64_t num_elems, DataType dtype,
                                     bool add) {
-  auto start = clock_::now();
   if (dtype != DataType::HOROVOD_FLOAT16) {
     CUDA_dequantize_maxmin_fp32(
         input, output, num_elems, bits_, bucket_size_, add,
@@ -123,7 +120,6 @@ void GPUMaxMinQuantizer::Decompress(unsigned char* input, unsigned char* output,
         input, output, num_elems, bits_, bucket_size_, add,
         *gpu_compression_context_->stream_);
   }
-  compression_time_ += time_since(start);
 }
 
 inline int64_t GPUMaxMinQuantizer::BufferSize(int num_elems, DataType dtype) {
@@ -202,7 +198,6 @@ int64_t GPUNormalizedQuantizer::Compress(unsigned char* input,
                                          unsigned char* output,
                                          unsigned char* feedback,
                                          int64_t num_elems, DataType dtype) {
-  auto start = clock_::now();
   if (dtype != DataType::HOROVOD_FLOAT16) {
     CUDA_quantize_Norm_fp32(
         input, output, feedback, levels_, num_elems, bits_, bucket_size_,
@@ -214,7 +209,6 @@ int64_t GPUNormalizedQuantizer::Compress(unsigned char* input,
         gpu_compression_context_->cuda_states_, norm_type_, levels_type_,
         *gpu_compression_context_->stream_);
   }
-  compression_time_ += time_since(start);
   return BufferSize(num_elems, dtype);
 }
 
@@ -222,7 +216,6 @@ void GPUNormalizedQuantizer::Decompress(unsigned char* input,
                                         unsigned char* output,
                                         int64_t num_elems, DataType dtype,
                                         bool add) {
-  auto start = clock_::now();
   if (dtype != DataType::HOROVOD_FLOAT16) {
     CUDA_dequantize_Norm_fp32(
         input, output, levels_, num_elems, bits_, bucket_size_, levels_type_,
@@ -234,7 +227,6 @@ void GPUNormalizedQuantizer::Decompress(unsigned char* input,
         levels_type_, add,
         *gpu_compression_context_->stream_);
   }
-  compression_time_ += time_since(start);
 }
 
 } // namespace common

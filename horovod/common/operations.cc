@@ -900,7 +900,6 @@ int horovod_reduce_op_adasum() {
   return ReduceOp::ADASUM;
 }
 
-
 void horovod_set_quantization_levels(float* levels) {
   SetQuantizationLevels(levels);
 }

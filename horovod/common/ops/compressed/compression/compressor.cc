@@ -8,6 +8,9 @@
 #include "../common.h"
 #include "../utils.h"
 
+
+#include "../reducers/reducer.h"
+
 namespace horovod {
 namespace common {
 
@@ -296,10 +299,6 @@ void Compressor::Decompress(
 
 void Compressor::Finalize() {}
 
-double Compressor::getMetaInfoTime() const { return meta_info_time_; }
-
-double Compressor::getCompressionTime() const { return compression_time_; }
-
 // ================
 // Dummy Compressor
 // ================
@@ -322,13 +321,13 @@ void CPUDummyCompressor::Decompress(unsigned char* input_data,
                                     unsigned char* output, int64_t num_elems,
                                     DataType dtype, bool add) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
-  int64_t processed_size = num_elems * sizeof(float);
   if (add) {
     float* output_f = (float*)output;
     float* input_f = (float*)input_data;
-    for (int i = 0; i < processed_size; i++)
+    for (int i = 0; i < num_elems; i++)
       output_f[i] += input_f[i];
   } else {
+    int64_t processed_size = num_elems * sizeof(float);
     std::memcpy(output, input_data, processed_size);
   }
 }
@@ -404,23 +403,19 @@ void CPUMaxMinQuantizer::CompressBucket(unsigned char* input_data,
 
   float max = input[0];
   float min = input[0];
-  auto start = clock_::now();
   for (int i = 1; i < num_elems; i++) {
     max = std::max(max, input[i]);
     min = std::min(min, input[i]);
   }
-  meta_info_time_ += time_since(start);
 
   meta_info_buffer[2 * bucket_no] = max;
   meta_info_buffer[2 * bucket_no + 1] = min;
   int divisor = (1 << bits_) - 1;
   float unit = (max - min) / divisor;
-  start = clock_::now();
   std::function<unsigned char(float, float*)> encode =
       std::bind(&CPUMaxMinQuantizer::EncodeValue, this, std::placeholders::_1,
                 std::placeholders::_2, min, unit);
   PackBucket(input, output, feedback, num_elems, bits_, encode);
-  compression_time_ += time_since(start);
 }
 
 unsigned char CPUMaxMinQuantizer::EncodeValue(float v, float* feedback,
@@ -449,15 +444,12 @@ void CPUMaxMinQuantizer::DecompressBucket(unsigned char* input_data,
                (bucket_size_ * bucket_no * bits_ + PACK_SIZE - 1) / PACK_SIZE;
   std::function<float(unsigned char)> decode = std::bind(
       &CPUMaxMinQuantizer::DecodeValue, this, std::placeholders::_1, min, unit);
-  auto start = clock_::now();
 
   UnpackBucket(input_data, output, num_elems, bits_, add, decode);
-  compression_time_ += time_since(start);
 }
 
 float CPUMaxMinQuantizer::DecodeValue(unsigned char input, float min,
                                       float unit) {
-  //  printf(" unit %f min %f decoded: %f\n", unit, min, (min + input * unit));
   return min + unit * input;
 }
 
@@ -587,7 +579,6 @@ void CPUNormalizedQuantizer::CompressBucket(
       output + (bucket_size_ * bucket_no * bits_ + PACK_SIZE - 1) / PACK_SIZE;
 
   float norm = 0;
-  auto start = clock_::now();
   if (norm_type_ == NormType::Linf) {
     for (int i = 0; i < num_elems; i++) {
       norm = std::max((float)fabs(input[i]), norm);
@@ -600,15 +591,12 @@ void CPUNormalizedQuantizer::CompressBucket(
   }
   if (norm < EPS)
     norm += EPS;
-  meta_info_time_ += time_since(start);
   meta_info_buffer[bucket_no] = norm;
-  start = clock_::now();
 
   std::function<unsigned char(float, float*)> encode =
       std::bind(&CPUNormalizedQuantizer::EncodeValue, this,
                 std::placeholders::_1, std::placeholders::_2, norm);
   PackBucket(input, output, feedback, num_elems, bits_, encode);
-  compression_time_ += time_since(start);
 }
 
 void CPUNormalizedQuantizer::DecompressBucket(unsigned char* input_data,
@@ -621,11 +609,9 @@ void CPUNormalizedQuantizer::DecompressBucket(unsigned char* input_data,
   float norm = meta_info_buffer[bucket_no];
   input_data = input_data +
                (bucket_size_ * bucket_no * bits_ + PACK_SIZE - 1) / PACK_SIZE;
-  auto start = clock_::now();
   std::function<float(unsigned char)> decode = std::bind(
       &CPUNormalizedQuantizer::DecodeValue, this, std::placeholders::_1, norm);
   UnpackBucket(input_data, output, num_elems, bits_, add, decode);
-  compression_time_ += time_since(start);
 }
 
 // Utils
@@ -661,7 +647,6 @@ void UnpackBucket(unsigned char* input, float* output, int num_elems, int bits,
     }
     for (int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems; j++) {
       unsigned char encoded_value = (value >> (j * bits)) & (divisor - 1);
-      //      printf("Decode idx: %i", i * PACK_SIZE + j);
       if (add)
         output[i * PACK_SIZE + j] += decode(encoded_value);
       else

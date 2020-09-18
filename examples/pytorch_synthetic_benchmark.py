@@ -8,6 +8,8 @@ from torchvision import models
 import timeit
 import numpy as np
 
+from aqsgd.qlevels import LevelsEst
+
 # Benchmark settings
 parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -88,6 +90,7 @@ optimizer = optim.SGD(model.parameters(), lr=0.01)
 if args.use_hvd and not args.use_apex:
     # Horovod: (optional) compression algorithm.
     compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+    # compression = hvd.Compression.fp32
     optimizer = hvd.DistributedOptimizer(optimizer,
                                          named_parameters=model.named_parameters(),
                                          compression=compression,
@@ -98,7 +101,7 @@ if args.use_hvd and not args.use_apex:
     hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
 if args.use_amp:
-    model, optimizer = amp.initialize(model, optimizer, opt_level="O2")
+    model, optimizer = amp.initialize(model, optimizer, opt_level="O1")
 
 if args.use_apex:
     if args.use_hvd:

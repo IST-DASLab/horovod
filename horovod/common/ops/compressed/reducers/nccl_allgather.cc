@@ -54,9 +54,7 @@ Status NCCL_Allreduce_AllGather::Init(
     return status;
   }
   status = error_feedback_.Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
+  return status;
 }
 
 Status NCCL_Allreduce_AllGather::AllreduceDivision(

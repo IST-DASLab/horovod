@@ -9,7 +9,7 @@ namespace common {
 
 class ErrorFeedback {
 public:
-  ErrorFeedback(Summator* summator);
+  ErrorFeedback(Summator* summator, bool do_print);
   // Initializes feedback buffers and computes offsets of the entries in feedback buffer.
   Status Init(const std::vector<TensorTableEntry>& entries);
   bool isEnabled() { return enabled_;}
@@ -21,6 +21,7 @@ private:
   Summator* summator_;
   FeedbackBufferManager bufferManager_;
   bool enabled_ = false;
+  int do_print_;
 };
 
 } // namespace common

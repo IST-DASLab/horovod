@@ -1,9 +1,10 @@
 #include "mpi_compressed_operations.h"
-#include "reducers/all_broadcast.h"
-#include "reducers/ring.h"
-#include "reducers/scatter_allgather.h"
-#include "utils.h"
 #include "common.h"
+#include "reducers/mpi_allgather.h"
+#include "reducers/mpi_ps.h"
+#include "reducers/mpi_ring.h"
+#include "reducers/mpi_scatter_allgather.h"
+#include "utils.h"
 
 namespace horovod {
 namespace common {
@@ -38,8 +39,8 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
   }
   auto summator = new CPUSummator();
   switch (reduction_type) {
-  case ReductionType::AllBroadcast:
-    mpiReducer = new MPI_Allreduce_AllBroadcast(mpi_context, global_state,
+  case ReductionType::AllGather:
+    mpiReducer = new MPI_Allreduce_AllGather(mpi_context, global_state,
                                                 compressor, summator);
     break;
   case ReductionType::Ring:
@@ -48,6 +49,10 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
     break;
   case ReductionType::ScatterAllgather:
     mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
+        mpi_context, global_state, compressor, summator);
+    break;
+  case ReductionType::PS:
+    mpiReducer = new MPI_Allreduce_PS(
         mpi_context, global_state, compressor, summator);
     break;
   default:
@@ -100,10 +105,8 @@ Status MPI_CompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
   auto compress_ratio = GetDoubleEnvOrDefault("HOROVOD_COMPRESS_RATIO", 1.0);
   num_elements = (int64_t)(num_elements * compress_ratio);
   buffer_len = (size_t)(buffer_len * compress_ratio);
-  auto start = clock_::now();
   auto status = Allreduce(num_elements, mpi_context_->GetMPICommunicator(Communicator::GLOBAL),
       entries, buffer_len);
-  global_state_->allreduce_time += time_since(start);
   if (!status.ok()) {
     for (auto& e : entries) {
       e.callback(status);

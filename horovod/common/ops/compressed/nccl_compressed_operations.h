@@ -25,9 +25,8 @@ public:
   bool Enabled(const ParameterManager& param_manager,
                const std::vector<TensorTableEntry>& entries,
                const Response& response) const override;
+  bool EnabledName(const std::string& name) const;
 protected:
-  void InitNCCLCommunicator_All(const std::vector<TensorTableEntry>& entries);
-  void InitNCCLCommunicator_Ring(const std::vector<TensorTableEntry>& entries);
   NCCLReducer *reducer;
   ReductionType reduction_type_;
 };

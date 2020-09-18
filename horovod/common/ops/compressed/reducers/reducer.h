@@ -24,7 +24,7 @@ public:
   Reducer(HorovodGlobalState* global_state, Compressor* compressor,
           Summator* summator)
       : global_state_(global_state), compressor_(compressor),
-        summator_(summator), error_feedback_(summator) {
+        summator_(summator), error_feedback_(summator, global_state->controller->GetRank() == 0) {
     tensor_fusion_threshold_ =
         global_state->parameter_manager.TensorFusionThresholdBytes();
   }
@@ -106,7 +106,7 @@ protected:
   gpuStream_t* stream_;
 };
 
-void printDebug(float* bf, int num_elems, int device);
+void printDebug(float* bf, int num_elems, int device, std::string prefix);
 
 } // namespace common
 } // namespace horovod

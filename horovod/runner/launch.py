@@ -485,9 +485,12 @@ def parse_args():
                                         action=make_override_action(override_args),
                                         choices=list(config_parser.LevelsType),
                                         help='Choose levels for norm based quantization (Pos - [0,1], Wide - [-1, 1])')
-    group_grad_compression.add_argument('-q', '--quantization-bits', type=int, default=None,
+    group_grad_compression.add_argument('-q', '--compression-quantization-bits', type=int, default=None,
                                         action=make_override_action(override_args),
                                         help='Number of bits quantize to (0-8). 0 means no compression')
+    group_grad_compression.add_argument('--compression-nccl-fake-ratio', type=float, default=1.0,
+                                        action=make_override_action(override_args),
+                                        help='Fake compression in nccl')
     group_grad_compression.add_argument('--compression-error-feedback', action=make_override_true_action(override_args),
                                         help='Enable error feedback for gradient compression.')
 
