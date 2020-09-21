@@ -43,7 +43,7 @@ public:
                          const Response& response) = 0;
 
 protected:
-  int64_t NumElements(std::vector<TensorTableEntry>& entries);
+  int64_t NumElements(std::vector<TensorTableEntry>& entries) const;
 
   HorovodGlobalState* global_state_;
 };
@@ -61,6 +61,7 @@ public:
                        const std::vector<TensorTableEntry>& entries,
                        const Response& response) const = 0;
   virtual bool EnabledName(const std::string& name) const;
+
 protected:
   virtual void
   MemcpyInFusionBuffer(const std::vector<TensorTableEntry>& entries,
@@ -84,18 +85,28 @@ protected:
   ScaleBuffer(double scale_factor, const std::vector<TensorTableEntry>& entries,
               const void* fused_input_data, void* buffer_data, int64_t num_elements);
 
+  virtual void ScaleBufferSingle(double scale_factor, const TensorTableEntry& entry,
+                           const void* fused_input_data, void* buffer_data,
+                           int64_t num_elements);
+
+  virtual void ScaleEntriesInPlace(double scale_factor,
+                                  const std::vector<TensorTableEntry>& entries,
+                                  bool in_place);
 };
 
 template <typename T, typename TS>
-void ScaleBufferCPUImpl(const T* input, T* output, int64_t num_elements, TS scale_factor) {
+void ScaleBufferCPUImpl(const T* input, T* output, int64_t num_elements,
+                        TS scale_factor) {
   for (int64_t i = 0; i < num_elements; ++i) {
     output[i] = scale_factor * input[i];
   }
 }
 
 // Specialization for float16
-template <> inline
-void ScaleBufferCPUImpl(const unsigned short* input, unsigned short* output, int64_t num_elements, float scale_factor) {
+template <>
+inline void ScaleBufferCPUImpl(const unsigned short* input,
+                               unsigned short* output, int64_t num_elements,
+                               float scale_factor) {
   int64_t i = 0;
 
 #if __AVX__ && __F16C__
@@ -103,7 +114,8 @@ void ScaleBufferCPUImpl(const unsigned short* input, unsigned short* output, int
     __m256 scale_factor_m256 = _mm256_broadcast_ss(&scale_factor);
     for (; i < (num_elements / 8) * 8; i += 8) {
       // convert input to m256
-      __m256 input_m256 = _mm256_cvtph_ps(_mm_loadu_si128((__m128i*)(input + i)));
+      __m256 input_m256 =
+          _mm256_cvtph_ps(_mm_loadu_si128((__m128i*)(input + i)));
 
       // scale and store result in output_m256
       __m256 output_m256 = _mm256_mul_ps(input_m256, scale_factor_m256);
@@ -121,7 +133,6 @@ void ScaleBufferCPUImpl(const unsigned short* input, unsigned short* output, int
     float out_float = scale_factor * in_float;
     Float2HalfBits(&out_float, output + i);
   }
-
 }
 
 class AllgatherOp : public HorovodOp {
@@ -170,8 +181,7 @@ protected:
   virtual void
   MemcpyEntryOutFusionBuffer(const std::vector<TensorTableEntry>& entries,
                              const void* buffer_data_at_offset,
-                             TensorTableEntry& e,
-                             int64_t entry_offset,
+                             TensorTableEntry& e, int64_t entry_offset,
                              size_t entry_size);
 };
 
@@ -204,8 +214,7 @@ public:
 
 protected:
   template <typename T>
-  Status PrepareOutputAndParams(TensorTableEntry& e,
-                                std::vector<T>& sdispls,
+  Status PrepareOutputAndParams(TensorTableEntry& e, std::vector<T>& sdispls,
                                 std::vector<T>& rdispls,
                                 std::vector<T>& sendcounts,
                                 std::vector<T>& recvcounts) {
@@ -239,8 +248,8 @@ protected:
     }
 
     for (int i = 1; i < world_size; ++i) {
-      sdispls[i] = sdispls[i-1] + sendcounts[i-1];
-      rdispls[i] = rdispls[i-1] + recvcounts[i-1];
+      sdispls[i] = sdispls[i - 1] + sendcounts[i - 1];
+      rdispls[i] = rdispls[i - 1] + recvcounts[i - 1];
     }
 
     // Allocate output
@@ -272,7 +281,8 @@ public:
 
   virtual ~ErrorOp() = default;
 
-  virtual Status Execute(std::vector<TensorTableEntry>& entries, const Response& response);
+  virtual Status Execute(std::vector<TensorTableEntry>& entries,
+                         const Response& response);
 };
 
 } // namespace common

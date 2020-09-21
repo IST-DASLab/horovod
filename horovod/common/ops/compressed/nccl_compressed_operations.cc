@@ -4,6 +4,8 @@
 #include "reducers/nccl_ring.h"
 #include "reducers/nccl_scatter_allgather.h"
 
+#include <string>
+
 namespace horovod {
 namespace common {
 
@@ -24,7 +26,7 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
                                            compressor, summator);
     break;
   case ReductionType::NCCL_ScatterAllgather:
-#if NCCL_VERSION_CHECK(2, 7, 0)
+#ifdef NCCL_P2P_SUPPORTED
     reducer = new NCCL_Allreduce_ScatterAllgather(
         nccl_context, gpu_context, &gpu_op_context_, global_state, compressor,
         summator);
@@ -33,13 +35,13 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
     throw std::logic_error("NCCL_ScatterAllgather is not supported because of older NCCL Version.");
 #endif
   case ReductionType::NCCL_Ring:
-#if NCCL_VERSION_CHECK(2, 7, 0)
+#ifdef NCCL_P2P_SUPPORTED
     reducer =
         new NCCL_Allreduce_Ring(nccl_context, gpu_context, &gpu_op_context_,
                                 global_state, compressor, summator);
     break;
 #else
-    throw std::logic_error("NCCL_Ring is not supported because of older NCCL Version.");
+    throw std::logic_error("NCCL_Ring is not supported because of older NCCL Version.: " + std::to_string(NCCL_VERSION_CODE));
 #endif
     default:
     reducer = nullptr;
@@ -93,13 +95,18 @@ Status NCCL_CompressedAllreduce::Execute(
   gpu_op_context_.InitGPU(entries);
   nccl_op_context_.InitNCCLComm(entries, response.devices());
   gpu_op_context_.InitGPUQueue(entries, response);
-
+  if (response.prescale_factor() != 1.0) {
+    ScaleEntriesInPlace(response.prescale_factor(), entries, false);
+  }
   auto status = Allreduce(num_elements, entries, buffer_len);
   if (!status.ok()) {
     for (auto& e : entries) {
       e.callback(status);
     }
     return status;
+  }
+  if (response.postscale_factor() != 1.0) {
+    ScaleEntriesInPlace(response.postscale_factor(), entries, true);
   }
   return gpu_op_context_.FinalizeGPUQueue(entries);
 }
@@ -113,7 +120,7 @@ bool NCCL_CompressedAllreduce::Enabled(
     const std::vector<TensorTableEntry>& entries,
     const Response& response) const {
   if (reducer == nullptr ||
-      NumElements(entries) * sizeof(float) < BUFFER_THRESHOLD ||
+      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) * sizeof(float) < BUFFER_THRESHOLD ||
       !EnabledName(entries[0].tensor_name) ||
       !(entries[0].tensor->dtype() == HOROVOD_FLOAT32 ||
         entries[0].tensor->dtype() == HOROVOD_FLOAT16) ||

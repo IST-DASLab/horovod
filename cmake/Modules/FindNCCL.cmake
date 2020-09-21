@@ -51,6 +51,13 @@ if (NCCL_FOUND)
                 NCCL_MAJOR_VERSION ${NCCL_MAJOR_VERSION_DEFINED})
         message(STATUS "NCCL_MAJOR_VERSION: ${NCCL_MAJOR_VERSION}")
     endif()
+    file (STRINGS ${NCCL_HEADER_FILE} NCCL_MINOR_VERSION_DEFINED
+            REGEX "^[ \t]*#define[ \t]+NCCL_MINOR[ \t]+[0-9]+.*$" LIMIT_COUNT 1)
+    if (NCCL_MINOR_VERSION_DEFINED)
+        string (REGEX REPLACE "^[ \t]*#define[ \t]+NCCL_MINOR[ \t]+" ""
+                NCCL_MINOR_VERSION ${NCCL_MINOR_VERSION_DEFINED})
+        message(STATUS "NCCL_MINOR_VERSION: ${NCCL_MINOR_VERSION}")
+    endif()
     set(NCCL_INCLUDE_DIRS ${NCCL_INCLUDE_DIR})
     set(NCCL_LIBRARIES ${NCCL_LIBRARY})
     message(STATUS "Found NCCL (include: ${NCCL_INCLUDE_DIRS}, library: ${NCCL_LIBRARIES})")

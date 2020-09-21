@@ -1,5 +1,6 @@
 #include "nccl_ring.h"
-#if NCCL_VERSION_CHECK(2, 7, 0)
+#include "../utils.h"
+#ifdef NCCL_P2P_SUPPORTED
 
 namespace horovod {
 namespace common {
@@ -110,12 +111,12 @@ Status NCCL_Allreduce_Ring::AllreduceDivision(
             gradients_send_, entries, error_feedback_, buf_send_idx,
             global_offset, segment_size(send_segment_idx), i == 0),
                  ALIGNMENT_UNIT);
-    NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart());
+    NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart(), *nccl_comm_);
     NCCL_CALL_CHECK("ncclSend", ncclSend(gradients_send_, send_size, ncclChar, send_to,
-                                         *nccl_comm_, *stream_));
+                                         *nccl_comm_, *stream_), *nccl_comm_);
     NCCL_CALL_CHECK("ncclRecv", ncclRecv(gradients_recv_, recv_size, ncclChar, recv_from,
-                                         *nccl_comm_, *stream_));
-    NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd());
+                                         *nccl_comm_, *stream_), *nccl_comm_);
+    NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd(), *nccl_comm_);
     compressor_->Decompress(gradients_recv_, entries, buf_recv_idx,
                             global_offset, segment_size(recv_segment_idx),
                             true);
@@ -146,14 +147,14 @@ Status NCCL_Allreduce_Ring::AllreduceDivision(
         round_to(compressor_->BufferSize(segment_size(recv_segment_idx),
                                          entries, buf_recv_idx, global_offset),
                  ALIGNMENT_UNIT);
-    NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart());
+    NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart(), *nccl_comm_);
 
     // Segment to recv - at every iteration we receive segment (r-i)
     NCCL_CALL_CHECK("ncclSend", ncclSend(send_buf, send_size, ncclChar, send_to,
-                                         *nccl_comm_, *stream_));
+                                         *nccl_comm_, *stream_), *nccl_comm_);
     NCCL_CALL_CHECK("ncclRecv", ncclRecv(recv_buf, recv_size, ncclChar, recv_from,
-                                         *nccl_comm_, *stream_));
-    NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd());
+                                         *nccl_comm_, *stream_), *nccl_comm_);
+    NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd(), *nccl_comm_);
 
     send_buf += send_size;
     recv_buf += recv_size;

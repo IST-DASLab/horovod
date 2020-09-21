@@ -109,10 +109,10 @@ void GPUAllreduce::MemcpyEntryOutFusionBuffer(const std::vector<TensorTableEntry
                                gpu_context_->streams[global_state_->current_nccl_stream][first_entry.device]);
 }
 
-void GPUAllreduce::ScaleBuffer(double scale_factor, const std::vector<TensorTableEntry>& entries,
+void GPUAllreduce::ScaleBufferSingle(double scale_factor, const TensorTableEntry& entry,
                                const void* fused_input_data, void* buffer_data, int64_t num_elements) {
-  gpu_context_->ScaleBufferImpl(fused_input_data, buffer_data, num_elements, scale_factor, entries[0].tensor->dtype(),
-                                gpu_context_->streams[global_state_->current_nccl_stream][entries[0].device]);
+  gpu_context_->ScaleBufferImpl(fused_input_data, buffer_data, num_elements, scale_factor, entry.tensor->dtype(),
+                                gpu_context_->streams[global_state_->current_nccl_stream][entry.device]);
 
 }
 

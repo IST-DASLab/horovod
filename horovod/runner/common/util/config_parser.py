@@ -14,6 +14,7 @@
 # ==============================================================================
 
 import logging
+from enum import Enum
 
 # Parameter knobs
 HOROVOD_FUSION_THRESHOLD = 'HOROVOD_FUSION_THRESHOLD'
@@ -250,6 +251,9 @@ def _add_arg_to_env(env, env_key, arg_value, transform_fn=None):
 def set_env_from_args(env, args):
     def identity(value):
         return 1 if value else 0
+
+    def enum_tf(value):
+        return value.value
 
     # Params
     _add_arg_to_env(env, HOROVOD_FUSION_THRESHOLD, args.fusion_threshold_mb, lambda v: v * 1024 * 1024)

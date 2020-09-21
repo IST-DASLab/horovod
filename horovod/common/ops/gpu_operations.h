@@ -142,7 +142,7 @@ protected:
   void MemcpyEntryOutFusionBuffer(const std::vector<TensorTableEntry>& entries,
                                   const void* buffer_data_at_offset, TensorTableEntry& e) override;
 
-  void ScaleBuffer(double scale_factor, const std::vector<TensorTableEntry>& entries,
+  void ScaleBufferSingle(double scale_factor, const TensorTableEntry& entry,
                    const void* fused_input_data, void* buffer_data, int64_t num_elements);
 
   GPUContext* gpu_context_;

@@ -133,6 +133,26 @@ if (NOT "$ENV{HOROVOD_WITHOUT_MPI}" STREQUAL "1")
     endif()
 endif()
 
+if ("$ENV{HOROVOD_GRAD_COMPRESSION}" STREQUAL "1")
+    if (NOT HAVE_MPI)
+        message(FATAL_ERROR "Grad compression doesn't work wothout MPI")
+    endif()
+    list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/mpi_compressed_operations.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_allgather.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_scatter_allgather.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_ring.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_ps.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/compressor.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/common.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/error_feedback.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/vector_operations.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/feedback_buffer_manager.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/utils.cc"
+            )
+    set(GRAD_COMPRESSION TRUE)
+    add_definitions(-DGRAD_COMPRESSION=1)
+endif()
+
 # CUDA and ROCM
 macro(ADD_CUDA)
     if (DEFINED ENV{HOROVOD_CUDA_HOME})
@@ -147,6 +167,16 @@ macro(ADD_CUDA)
     # CUDA + MPI
     if(HAVE_MPI)
         list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/mpi_gpu_operations.cc")
+        if (GRAD_COMPRESSION)
+            if (Pytorch_CXX11)
+                list(APPEND PYTORCH_LINKER_LIBS horovod_cuda_compression_kernels)
+            else()
+                list(APPEND PYTORCH_LINKER_LIBS compatible_horovod_cuda_compression_kernels)
+            endif()
+            list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/mpi_gpu_compressed_operations.cc"
+                                "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/gpu_compressor.cc"
+                )
+        endif()
     endif()
     add_definitions(-DHAVE_CUDA=1 -DHAVE_GPU=1)
     set(HAVE_CUDA TRUE)
@@ -183,12 +213,19 @@ if(HOROVOD_GPU_ALLREDUCE STREQUAL "N" OR HOROVOD_GPU_ALLGATHER STREQUAL "N" OR H
         if (NCCL_MAJOR_VERSION LESS "2")
             message(FATAL_ERROR "Horovod requires NCCL 2.0 or later version please upgrade.")
         endif()
-        include_directories(SYSTEM ${NCCL_INCLUDE_DIRS})
+        include_directories(${NCCL_INCLUDE_DIRS})
         list(APPEND LINKER_LIBS ${NCCL_LIBRARIES})
     endif()
     list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/nccl_operations.cc")
     add_definitions(-DHAVE_NCCL=1)
     set(HAVE_NCCL TRUE)
+    if (GRAD_COMPRESSION)
+        list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/nccl_compressed_operations.cc"
+                "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/nccl_scatter_allgather.cc"
+                "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/nccl_ring.cc"
+                "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/nccl_allgather.cc"
+                )
+    endif()
 endif()
 
 # DDL
@@ -285,6 +322,9 @@ add_subdirectory(horovod/mxnet)
 # CUDA kernels
 if(HAVE_CUDA OR HAVE_SUB_PROJECT_CUDA)
     add_subdirectory(horovod/common/ops/cuda)
+    if (GRAD_COMPRESSION)
+        add_subdirectory(horovod/common/ops/compressed/compression/cuda)
+    endif()
 endif()
 
 # if we need compatible c++ abi

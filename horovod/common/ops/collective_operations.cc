@@ -24,7 +24,7 @@ namespace common {
 HorovodOp::HorovodOp(HorovodGlobalState* global_state)
     : global_state_(global_state) {}
 
-int64_t HorovodOp::NumElements(std::vector<TensorTableEntry>& entries) {
+int64_t HorovodOp::NumElements(std::vector<TensorTableEntry>& entries) const {
   int64_t num_elements = 0;
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();
@@ -42,7 +42,8 @@ void AllreduceOp::MemcpyInFusionBuffer(
   // Access the fusion buffer.
   auto& first_entry = entries[0];
   auto buffer = global_state_->fusion_buffer.GetBuffer(
-      first_entry.device, first_entry.context->framework(), global_state_->current_nccl_stream);
+      first_entry.device, first_entry.context->framework(),
+      global_state_->current_nccl_stream);
   buffer_data = const_cast<void*>(buffer->AccessData(first_entry.context));
 
   int64_t offset = 0;
@@ -82,43 +83,68 @@ void AllreduceOp::MemcpyEntryOutFusionBuffer(
               (size_t)e.output->size());
 }
 
-void AllreduceOp::ScaleBuffer(
-    double scale_factor, const std::vector<TensorTableEntry>& entries,
-    const void* fused_input_data, void* buffer_data,
-    int64_t num_elements) {
-
-  DataType dtype = entries[0].tensor->dtype();
+void AllreduceOp::ScaleBufferSingle(double scale_factor,
+                                    const TensorTableEntry& entry,
+                                    const void* fused_input_data,
+                                    void* buffer_data, int64_t num_elements) {
+  DataType dtype = entry.tensor->dtype();
   switch (dtype) {
-    case HOROVOD_UINT8:
-      ScaleBufferCPUImpl((const uint8_t*) fused_input_data, (uint8_t*) buffer_data, num_elements, scale_factor);
-      break;
-    case HOROVOD_INT8:
-      ScaleBufferCPUImpl((const int8_t*) fused_input_data, (int8_t*) buffer_data, num_elements, scale_factor);
-      break;
-    case HOROVOD_INT32:
-      ScaleBufferCPUImpl((const int32_t*) fused_input_data, (int32_t*) buffer_data, num_elements, scale_factor);
-      break;
-    case HOROVOD_INT64:
-      ScaleBufferCPUImpl((const int64_t*) fused_input_data, (int64_t*) buffer_data, num_elements, scale_factor);
-      break;
-    case HOROVOD_FLOAT16:
-      ScaleBufferCPUImpl((const unsigned short*) fused_input_data, (unsigned short*) buffer_data, num_elements, (float) scale_factor);
-      break;
-    case HOROVOD_FLOAT32:
-      ScaleBufferCPUImpl((const float*) fused_input_data, (float*) buffer_data, num_elements, (float) scale_factor);
-      break;
-    case HOROVOD_FLOAT64:
-      ScaleBufferCPUImpl((const double*) fused_input_data, (double*) buffer_data, num_elements, scale_factor);
-      break;
-    default:
-      throw std::logic_error("Type " + DataType_Name(dtype) +
-                             " not supported by ScaleBufferCPUImpl.");
+  case HOROVOD_UINT8:
+    ScaleBufferCPUImpl((const uint8_t*)fused_input_data, (uint8_t*)buffer_data,
+                       num_elements, scale_factor);
+    break;
+  case HOROVOD_INT8:
+    ScaleBufferCPUImpl((const int8_t*)fused_input_data, (int8_t*)buffer_data,
+                       num_elements, scale_factor);
+    break;
+  case HOROVOD_INT32:
+    ScaleBufferCPUImpl((const int32_t*)fused_input_data, (int32_t*)buffer_data,
+                       num_elements, scale_factor);
+    break;
+  case HOROVOD_INT64:
+    ScaleBufferCPUImpl((const int64_t*)fused_input_data, (int64_t*)buffer_data,
+                       num_elements, scale_factor);
+    break;
+  case HOROVOD_FLOAT16:
+    ScaleBufferCPUImpl((const unsigned short*)fused_input_data,
+                       (unsigned short*)buffer_data, num_elements,
+                       (float)scale_factor);
+    break;
+  case HOROVOD_FLOAT32:
+    ScaleBufferCPUImpl((const float*)fused_input_data, (float*)buffer_data,
+                       num_elements, (float)scale_factor);
+    break;
+  case HOROVOD_FLOAT64:
+    ScaleBufferCPUImpl((const double*)fused_input_data, (double*)buffer_data,
+                       num_elements, scale_factor);
+    break;
+  default:
+    throw std::logic_error("Type " + DataType_Name(dtype) +
+                           " not supported by ScaleBufferCPUImpl.");
   }
 }
 
-bool AllreduceOp::EnabledName(const std::string& name) const {
-  return true;
+void AllreduceOp::ScaleBuffer(double scale_factor,
+                              const std::vector<TensorTableEntry>& entries,
+                              const void* fused_input_data, void* buffer_data,
+                              int64_t num_elements) {
+  ScaleBufferSingle(scale_factor, entries[0], fused_input_data, buffer_data,
+              num_elements);
 }
+
+void AllreduceOp::ScaleEntriesInPlace(
+    double scale_factor,
+    const std::vector<horovod::common::TensorTableEntry>& entries,
+    bool in_place) {
+  for (auto& entry : entries) {
+    const void* input = (in_place) ? entry.output->data(): entry.tensor->data();
+    void* output = (void*) entry.output->data();
+    ScaleBufferSingle(scale_factor, entry,
+        input, output, entry.tensor->shape().num_elements());
+  }
+}
+
+bool AllreduceOp::EnabledName(const std::string& name) const { return true; }
 
 // Allgather
 AllgatherOp::AllgatherOp(HorovodGlobalState* global_state)

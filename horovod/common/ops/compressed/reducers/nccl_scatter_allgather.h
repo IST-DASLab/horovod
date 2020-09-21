@@ -2,7 +2,7 @@
 #define NCCL_SCATTER_ALLGATHER_H
 #include "reducer.h"
 
-#if NCCL_VERSION_CHECK(2, 7, 0)
+#ifdef NCCL_P2P_SUPPORTED
 namespace horovod {
 namespace common {
 class NCCL_Allreduce_ScatterAllgather : public NCCLReducer {

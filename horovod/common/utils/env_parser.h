@@ -45,6 +45,13 @@ int GetIntEnvOrDefault(const char* env_variable, int default_value);
 
 double GetDoubleEnvOrDefault(const char* env_variable, double default_value);
 
+template <typename T>
+T GetEnumEnvOrDefault(const char* env_variable, T default_value) {
+  auto env_value = std::getenv(env_variable);
+  return env_value != nullptr ?
+         (static_cast<T>(std::strtol(env_value, nullptr, 10))): default_value;
+}
+
 void SetEnv(const char* env_variable, const char* env_value);
 
 } // namespace common

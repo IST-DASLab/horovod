@@ -1,4 +1,5 @@
 #include "mpi_ps.h"
+#include "../utils.h"
 
 namespace horovod {
 namespace common {

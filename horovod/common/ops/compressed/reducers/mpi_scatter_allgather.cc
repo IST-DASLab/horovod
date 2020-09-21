@@ -99,7 +99,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     if (node_rank == rank) {
       continue;
     }
-    int start_offset =
+    int64_t start_offset =
         (num_elems_per_node * node_rank) + std::min(residue, node_rank);
     send_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
     send_compressed_size = round_to(

@@ -74,15 +74,8 @@ protected:
   MPIContext* mpi_context_;
 };
 
-#ifdef __JETBRAINS_IDE__
-#define NCCL_VERSION(X,Y,Z) ((X) * 1000 + (Y) * 100 + (Z))
-#endif
-
-#define NCCL_VERSION_CHECK(major, minor, patch) \
-(NCCL_VERSION_CODE >= NCCL_VERSION(major, minor, patch))
-
-#define NCCL_CALL_CHECK(name, op) \
-nccl_context_->ErrorCheck(name, op)
+#define NCCL_CALL_CHECK(name, op, comm) \
+nccl_context_->ErrorCheck(name, op, comm)
 
 class NCCLReducer : public Reducer {
 public:

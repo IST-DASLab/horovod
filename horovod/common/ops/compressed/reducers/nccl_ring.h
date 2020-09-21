@@ -2,7 +2,7 @@
 #define NCCL_RING_H
 #include "reducer.h"
 
-#if NCCL_VERSION_CHECK(2, 7, 0)
+#ifdef NCCL_P2P_SUPPORTED
 
 namespace horovod {
 namespace common {

@@ -1,6 +1,7 @@
 #include "nccl_scatter_allgather.h"
+#include "../utils.h"
 
-#if NCCL_VERSION_CHECK(2, 7, 0)
+#ifdef NCCL_P2P_SUPPORTED
 
 namespace horovod {
 namespace common {
@@ -119,21 +120,21 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
                               *stream_);
   }
   send_buf = gradients_send_;
-  NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart());
+  NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart(), *comm);
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank == rank) {
       continue;
     }
     send_compressed_size = send_sizes.front();
     NCCL_CALL_CHECK("ncclRecv", ncclRecv(recv_buf, recv_compressed_size,
-                                         ncclChar, node_rank, *comm, *stream_));
+                                         ncclChar, node_rank, *comm, *stream_), *comm);
     NCCL_CALL_CHECK("ncclSend", ncclSend(send_buf, send_compressed_size,
-                                         ncclChar, node_rank, *comm, *stream_));
+                                         ncclChar, node_rank, *comm, *stream_), *comm);
     recv_buf += recv_compressed_size;
     send_buf += send_compressed_size;
     send_sizes.pop();
   }
-  NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd());
+  NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd(), *comm);
   if (timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_NETWORK,
                               *stream_);
@@ -158,7 +159,7 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
   recv_buf = gradients_recv_;
   // second round of communication. receive the sums from other nodes
   send_compressed_size = recv_compressed_size;
-  NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart());
+  NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart(), *comm);
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank == rank) {
       continue;
@@ -171,12 +172,12 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
                                          their_start_offset, global_offset),
                  ALIGNMENT_UNIT);
     NCCL_CALL_CHECK("ncclRecv", ncclRecv(recv_buf, recv_compressed_size,
-                                         ncclChar, node_rank, *comm, *stream_));
+                                         ncclChar, node_rank, *comm, *stream_), *comm);
     NCCL_CALL_CHECK("ncclSend", ncclSend(gradients_send_, send_compressed_size,
-                                         ncclChar, node_rank, *comm, *stream_));
+                                         ncclChar, node_rank, *comm, *stream_), *comm);
     recv_buf += recv_compressed_size;
   }
-  NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd());
+  NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd(), *comm);
   if (timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_NETWORK,
                               *stream_);

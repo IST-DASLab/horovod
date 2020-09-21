@@ -1,6 +1,7 @@
 #include "gpu_compressor.h"
 #include "../../../logging.h"
 #include "../common.h"
+#include "../utils.h"
 
 namespace horovod {
 namespace common {

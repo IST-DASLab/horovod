@@ -8,7 +8,6 @@ from torchvision import models
 import timeit
 import numpy as np
 
-from aqsgd.qlevels import LevelsEst
 
 # Benchmark settings
 parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',

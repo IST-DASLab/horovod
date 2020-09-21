@@ -102,15 +102,18 @@ Status MPI_CompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
                                         const Response& response) {
   int64_t num_elements = NumElements(entries);
   size_t buffer_len = num_elements * sizeof(float);
-  auto compress_ratio = GetDoubleEnvOrDefault("HOROVOD_COMPRESS_RATIO", 1.0);
-  num_elements = (int64_t)(num_elements * compress_ratio);
-  buffer_len = (size_t)(buffer_len * compress_ratio);
+  if (response.prescale_factor() != 1.0) {
+    ScaleEntriesInPlace(response.prescale_factor(), entries, false);
+  }
   auto status = Allreduce(num_elements, mpi_context_->GetMPICommunicator(Communicator::GLOBAL),
       entries, buffer_len);
   if (!status.ok()) {
     for (auto& e : entries) {
       e.callback(status);
     }
+  }
+  if (response.postscale_factor() != 1.0) {
+    ScaleEntriesInPlace(response.postscale_factor(), entries, true);
   }
   return status;
 }
@@ -120,7 +123,7 @@ bool MPI_CompressedAllReduce::Enabled(
     const std::vector<horovod::common::TensorTableEntry>& entries,
     const horovod::common::Response& response) const {
   if (mpiReducer == nullptr ||
-      NumElements(entries) * sizeof(float) < BUFFER_THRESHOLD ||
+      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) * sizeof(float) < BUFFER_THRESHOLD ||
       entries[0].tensor->dtype() != HOROVOD_FLOAT32 ||
       entries[0].device != CPU_DEVICE_ID) {
     return false;

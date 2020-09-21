@@ -152,14 +152,14 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();
   }
-  float fake_comp_ratio = GetDoubleEnvOrDefault(HOROVOD_NCCL_FAKE_COMPRESSION, 1.0);
-  num_elements = (int64_t) (num_elements * fake_comp_ratio);
 
   if (response.prescale_factor() != 1.0) {
     // Execute prescaling op
     ScaleBuffer(response.prescale_factor(), entries, fused_input_data, buffer_data, num_elements);
     fused_input_data = buffer_data; // for unfused, scale is done out of place
   }
+  float fake_comp_ratio = GetDoubleEnvOrDefault(HOROVOD_NCCL_FAKE_COMPRESSION, 1.0);
+  num_elements = (int64_t) (num_elements * fake_comp_ratio);
 
   // Do allreduce.
   auto nccl_result = ncclAllReduce(fused_input_data, buffer_data,

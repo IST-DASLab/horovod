@@ -129,7 +129,6 @@ enum Communicator {
   CROSS = 2
 };
 
-=======
 enum ReductionType {
   AllGather,
   ScatterAllgather,

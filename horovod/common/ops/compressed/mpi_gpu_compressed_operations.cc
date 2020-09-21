@@ -51,7 +51,7 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
 MPI_GPUCompressedAllReduce::~MPI_GPUCompressedAllReduce() { delete mpiReducer; }
 
 Status MPI_GPUCompressedAllReduce::Allreduce(
-    int num_elements, MPI_Comm comm,
+    int64_t num_elements, MPI_Comm comm,
     std::vector<horovod::common::TensorTableEntry>& entries, int buffer_len) {
   Status status = mpiReducer->Init(entries);
   if (!status.ok()) {
@@ -88,23 +88,28 @@ MPI_GPUCompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
                                     const Response& response) {
   gpu_op_context_.InitGPU(entries);
   int64_t num_elements = NumElements(entries);
-  //  void* buffer_data;
-  size_t buffer_len = num_elements * sizeof(float);
+  int buffer_len = num_elements * sizeof(float);
+  if (response.prescale_factor() != 1.0) {
+    ScaleEntriesInPlace(response.prescale_factor(), entries, false);
+  }
   auto status = Allreduce(num_elements, MPI_COMM_WORLD, entries, buffer_len);
   if (!status.ok()) {
     for (auto& e : entries) {
       e.callback(status);
     }
   }
+  if (response.postscale_factor() != 1.0) {
+    ScaleEntriesInPlace(response.postscale_factor(), entries, true);
+  }
   return status;
 }
 
 bool MPI_GPUCompressedAllReduce::Enabled(
     const horovod::common::ParameterManager& param_manager,
-    const std::vector<horovod::common::TensorTableEntry>& entries,
+    const std::vector<TensorTableEntry>& entries,
     const horovod::common::Response& response) const {
   if (mpiReducer == nullptr ||
-      NumElements(entries) * sizeof(float) < BUFFER_THRESHOLD ||
+      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) * sizeof(float) < BUFFER_THRESHOLD ||
       !EnabledName(entries[0].tensor_name) ||
       !(entries[0].tensor->dtype() == HOROVOD_FLOAT32 ||
         entries[0].tensor->dtype() == HOROVOD_FLOAT16) ||

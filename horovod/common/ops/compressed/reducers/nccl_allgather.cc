@@ -1,4 +1,5 @@
 #include "nccl_allgather.h"
+#include "../utils.h"
 
 namespace horovod {
 namespace common {
@@ -77,7 +78,7 @@ Status NCCL_Allreduce_AllGather::AllreduceDivision(
   auto nccl_result =
       ncclAllGather((void*)send_buf, (void*)gradients_recv_,
                     (size_t)send_rcv_size, ncclChar, *nccl_comm, *stream_);
-  nccl_context_->ErrorCheck("ncclAllGather", nccl_result);
+  nccl_context_->ErrorCheck("ncclAllGather", nccl_result, *nccl_comm);
   if (global_state_->timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_NETWORK,
                               *stream_);
