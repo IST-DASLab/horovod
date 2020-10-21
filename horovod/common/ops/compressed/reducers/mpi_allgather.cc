@@ -5,16 +5,19 @@ namespace horovod {
 namespace common {
 
 MPI_Allreduce_AllGather::MPI_Allreduce_AllGather(
-    MPIContext* mpi_context, HorovodGlobalState* global_state,
-    Compressor* compressor, Summator* summator)
-    : MPIReducer(mpi_context, global_state, compressor, summator) {
+    MPIContext* mpi_context, GPUContext* gpu_context,
+    HorovodGlobalState* global_state, Compressor* compressor,
+    Summator* summator)
+    : MPIReducer(mpi_context, gpu_context, global_state, compressor, summator) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "AllGather";
   }
 }
 
 Status
-MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries) {
+MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries,
+                              MPI_Comm comm) {
+  comm_ = comm;
   auto& first_entry = entries[0];
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
@@ -61,15 +64,20 @@ MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries) {
 }
 
 Status MPI_Allreduce_AllGather::AllreduceDivision(
-    int num_elements, MPI_Comm comm, std::vector<TensorTableEntry>& entries,
+    int num_elements, std::vector<TensorTableEntry>& entries,
     int64_t global_offset) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
   timeline.ActivityStartAll(entries, Q_COMPRESSION);
-  int64_t send_rcv_size =
-      compressor_->Compress(gradients_send_, entries, error_feedback_, 0,
-                            global_offset, num_elements);
+  gpuStream_t stream =
+      gpu_context_
+          ->streams[global_state_->current_nccl_stream][entries[0].device];
+
+  int64_t send_rcv_size = ALIGNED_SIZE(compressor_->Compress(
+      gradients_send_, entries, error_feedback_, 0, global_offset, num_elements,
+      true, false, &stream));
+  cudaStreamSynchronize(stream);
   compressor_->Finalize();
   timeline.ActivityEndAll(entries);
   std::vector<MPI_Request> requests;
@@ -80,22 +88,25 @@ Status MPI_Allreduce_AllGather::AllreduceDivision(
       continue;
     requests.push_back(MPI_Request());
     MPI_CHECK(MPI_Irecv(gradients_recv_ + count * send_rcv_size, send_rcv_size,
-              MPI_UNSIGNED_CHAR, node_rank, 0, comm, &requests.back()));
+                        MPI_UNSIGNED_CHAR, node_rank, 0, comm_,
+                        &requests.back()));
 
     requests.push_back(MPI_Request());
-    MPI_CHECK(MPI_Isend(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, node_rank, 0,
-              comm, &requests.back()));
+    MPI_CHECK(MPI_Isend(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR,
+                        node_rank, 0, comm_, &requests.back()));
     count++;
   }
-  MPI_CHECK(MPI_Waitall((int)requests.size(), requests.data(), MPI_STATUSES_IGNORE));
+  MPI_CHECK(
+      MPI_Waitall((int)requests.size(), requests.data(), MPI_STATUSES_IGNORE));
   timeline.ActivityEndAll(entries);
   timeline.ActivityStartAll(entries, Q_DECOMPRESSION);
   compressor_->Decompress(gradients_send_, entries, 0, global_offset,
-                          num_elements, false);
+                          num_elements, false, (void*)&stream);
   for (int i = 0; i < world_size - 1; i++) {
-    compressor_->Decompress(gradients_recv_ + i * send_rcv_size,
-                            entries, 0, global_offset, num_elements, true);
+    compressor_->Decompress(gradients_recv_ + i * send_rcv_size, entries, 0,
+                            global_offset, num_elements, true, (void*)&stream);
   }
+  cudaStreamSynchronize(stream);
   compressor_->Finalize();
   timeline.ActivityEndAll(entries);
   return Status::OK();

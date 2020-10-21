@@ -48,6 +48,19 @@ template <typename T> struct hash<std::vector<T>> {
   }
 };
 
+template <typename U, typename V> struct hash<std::pair<U, V>> {
+  using argument_type = std::pair<U, V>;
+  using result_type = std::size_t;
+
+  result_type operator()(argument_type const& in) const {
+    result_type seed = 0;
+    seed = hash_one<U>(in.first, seed);
+    seed = hash_one<V>(in.second, seed);
+    return seed;
+  }
+};
+
+
 template <typename U, typename V> struct hash<std::tuple<U, V>> {
   using argument_type = std::tuple<U, V>;
   using result_type = std::size_t;

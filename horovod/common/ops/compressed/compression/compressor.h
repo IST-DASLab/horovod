@@ -7,7 +7,6 @@
 namespace horovod {
 namespace common {
 const int COMPRESSION_BUCKET_SIZE = 512;
-const int ALIGNMENT_UNIT = 2 * sizeof(float);
 
 class Compressor {
 public:
@@ -22,22 +21,24 @@ public:
   // Returns size of compressed size (in bytes). And update error_feedback.
   // If error_feedback is nullptr, it's not updated.
   virtual int64_t Compress(unsigned char* input_data, unsigned char* output,
-                           unsigned char* feedback_data, int64_t num_elems, DataType dtype) = 0;
+                           unsigned char* feedback_data, int64_t num_elems,
+                           DataType dtype, void* ctx) = 0;
   // Decompress data from input to output.
   // If add is True sum decompressed data with output.
   virtual void Decompress(unsigned char* input, unsigned char* output,
-                          int64_t num_elems, DataType dtype, bool add) = 0;
+                          int64_t num_elems, DataType dtype, bool add, void* ctx) = 0;
   // Compresses input_data into output per entry. Returns size of compressed
   // data.
   int64_t Compress(unsigned char* input_data, unsigned char* output,
                    const std::vector<TensorTableEntry>& entries,
                    ErrorFeedback& error_feedback, int64_t fusion_offset,
                    int64_t global_offset, int64_t chunk_num_elems,
-                   bool disable_error_feedback=false);
+                   bool disable_error_feedback, void* ctx);
   // Decompresses input_data into output.
   void Decompress(unsigned char* input_data, unsigned char* output,
                   const std::vector<TensorTableEntry>& entries,
-                  int64_t fusion_offset, int64_t chunk_num_elems, bool add);
+                  int64_t fusion_offset, int64_t chunk_num_elems, bool add,
+                  void* ctx);
   // Compresses entries data into output. Returns size of compressed data.
   // @original parameter stands for where take the values from entry: original
   // tensor or output.
@@ -45,16 +46,17 @@ public:
                    const std::vector<TensorTableEntry>& entries,
                    ErrorFeedback& error_feedback, int64_t fusion_offset,
                    int64_t global_offset, int64_t chunk_num_elems,
-                   bool original = true, bool disable_error_feedback=false);
+                   bool original, bool disable_error_feedback,
+                   void* ctx);
   // Decompresses input_data into entries.
   void Decompress(unsigned char* input_data,
                   const std::vector<TensorTableEntry>& entries,
                   int64_t fusion_offset, int64_t global_offset,
-                  int64_t chunk_num_elems, bool add);
+                  int64_t chunk_num_elems, bool add, void* ctx);
 
   virtual void Finalize();
   virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
-  virtual void SetQuantizationLevels(float* levels) ;
+  virtual void SetQuantizationLevels(float* levels);
 protected:
   // The size of the bucket.
   int bucket_size_;
@@ -79,9 +81,9 @@ public:
       : DummyCompressor(global_state) {}
 
   int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems, DataType dtype) override;
+                   unsigned char* feedback_data, int64_t num_elems, DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add) override;
+                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
 };
 
 class CPURandomizer {
@@ -121,9 +123,9 @@ public:
   CPUMaxMinQuantizer(HorovodGlobalState* global_state, int quantization_bits)
       : MaxMinQuantizer(global_state, quantization_bits) {}
   int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems, DataType dtype) override;
+                   unsigned char* feedback_data, int64_t num_elems, DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add) override;
+                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
   void CompressBucket(unsigned char* input_data, float* meta_info_buffer,
                       unsigned char* output, unsigned char* feedback_data,
                       int64_t num_elems, int64_t bucket_no);
@@ -161,9 +163,9 @@ public:
   Status
   Init(const std::vector<horovod::common::TensorTableEntry>& entries) override;
   int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems, DataType dtype) override;
+                   unsigned char* feedback_data, int64_t num_elems, DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add) override;
+                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
 
   unsigned char EncodeValue(float input, float* feedback, float norm);
 

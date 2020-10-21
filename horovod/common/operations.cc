@@ -162,6 +162,8 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   if (mpi_context.IsEnabled()) {
 #if GRAD_COMPRESSION
     allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
+        new MPI_CompressedAllReduce(&mpi_context, &gpu_context, &state)));
+    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
         new MPI_GPUCompressedAllReduce(&mpi_context, &gpu_context, &state)));
 #endif
 
@@ -247,10 +249,6 @@ OperationManager* CreateOperationManager(HorovodGlobalState& state) {
   if (mpi_context.IsEnabled()){
     adasum_ops.push_back(
         std::shared_ptr<AllreduceOp>(new AdasumMPIAllreduceOp(&mpi_context, &state)));
-#if GRAD_COMPRESSION
-    allreduce_ops.push_back(std::shared_ptr<AllreduceOp>(
-        new MPI_CompressedAllReduce(&mpi_context, &state)));
-#endif
     allreduce_ops.push_back(
         std::shared_ptr<AllreduceOp>(new MPIAllreduce(&mpi_context,&state)));
     allgather_ops.push_back(

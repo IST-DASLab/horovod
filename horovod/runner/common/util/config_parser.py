@@ -71,7 +71,8 @@ class ReductionType(Enum):
     NCCL_AllGather = 4
     NCCL_SRA = 5
     NCCL_Ring = 6
-    none = 7
+    SHM_SRA = 7
+    none = 8
 
     def __str__(self):
         return self.name

@@ -1,30 +1,24 @@
 #ifndef HOROVOD_REDUCER_H
 #define HOROVOD_REDUCER_H
 
-#include "../../../mpi/mpi_context.h"
+#include "../../../hashes.h"
 #include "../../nccl_operations.h"
 #include "../compression/compressor.h"
 #include "../compression/error_feedback.h"
 #include "../compression/vector_operations.h"
+#include "common.h"
+#include "shm_utils.h"
 
 namespace horovod {
 namespace common {
-
-#define MPI_CHECK(condition)                                                   \
-  do {                                                                         \
-    int op = condition;                                                        \
-    if (op != MPI_SUCCESS) {                                                   \
-      throw std::runtime_error(std::string(#condition) + " on line " +         \
-                               std::to_string(__LINE__) + " failed: ");        \
-    }                                                                          \
-  } while (0)
 
 class Reducer {
 public:
   Reducer(HorovodGlobalState* global_state, Compressor* compressor,
           Summator* summator)
       : global_state_(global_state), compressor_(compressor),
-        summator_(summator), error_feedback_(summator, global_state->controller->GetRank() == 0) {
+        summator_(summator),
+        error_feedback_(summator, global_state->controller->GetRank() == 0) {
     tensor_fusion_threshold_ =
         global_state->parameter_manager.TensorFusionThresholdBytes();
   }
@@ -33,8 +27,6 @@ public:
     delete compressor_;
     delete summator_;
   }
-
-  virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
 
   void ApplyErrorFeedback(std::vector<TensorTableEntry>& entries) {
     error_feedback_.Apply(entries);
@@ -59,23 +51,27 @@ protected:
 
 class MPIReducer : public Reducer {
 public:
-  MPIReducer(MPIContext* mpi_context, HorovodGlobalState* global_state,
-             Compressor* compressor, Summator* summator)
-      : mpi_context_(mpi_context), Reducer(global_state, compressor, summator) {
-  }
+  MPIReducer(MPIContext* mpi_context, GPUContext* gpu_context,
+             HorovodGlobalState* global_state, Compressor* compressor,
+             Summator* summator)
+      : mpi_context_(mpi_context), gpu_context_(gpu_context),
+        Reducer(global_state, compressor, summator) {}
 
-  virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
+  virtual Status Init(const std::vector<TensorTableEntry>& entries,
+                      MPI_Comm comm) = 0;
 
-  virtual Status AllreduceDivision(int num_elements, MPI_Comm comm,
+  virtual Status AllreduceDivision(int num_elements,
                                    std::vector<TensorTableEntry>& entries,
                                    int64_t global_offset) = 0;
 
 protected:
   MPIContext* mpi_context_;
+  GPUContext* gpu_context_;
+  MPI_Comm comm_;
 };
 
-#define NCCL_CALL_CHECK(name, op, comm) \
-nccl_context_->ErrorCheck(name, op, comm)
+#define NCCL_CALL_CHECK(name, op, comm)                                        \
+  nccl_context_->ErrorCheck(name, op, comm)
 
 class NCCLReducer : public Reducer {
 public:
@@ -99,6 +95,24 @@ protected:
   gpuStream_t* stream_;
 };
 
+class SHMReducer : public MPIReducer {
+public:
+  SHMReducer(MPIContext* mpi_context, GPUContext* gpu_context,
+             HorovodGlobalState* global_state, Compressor* compressor,
+             Summator* summator)
+      : MPIReducer(mpi_context, gpu_context, global_state, compressor,
+                   summator){};
+
+  virtual Status AllreduceDivision(int num_elements,
+                                   std::vector<TensorTableEntry>& entries,
+                                   int64_t global_offset) = 0;
+  virtual ~SHMReducer() {
+    shm_comm_.reset();
+  }
+
+protected:
+  std::shared_ptr<shmComm> shm_comm_;
+};
 void printDebug(float* bf, int num_elems, int device, std::string prefix);
 
 } // namespace common

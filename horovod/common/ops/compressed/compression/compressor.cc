@@ -78,7 +78,7 @@ int64_t Compressor::Compress(
     unsigned char* input_data, unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     ErrorFeedback& error_feedback, int64_t fusion_offset, int64_t global_offset,
-    int64_t chunk_num_elems, bool disable_error_feedback) {
+    int64_t chunk_num_elems, bool disable_error_feedback, void* ctx) {
   int64_t total_compressed_size = 0;
   auto dtype = entries[0].tensor->dtype();
   if (entries.size() == 1) {
@@ -88,7 +88,7 @@ int64_t Compressor::Compress(
                       (global_offset + fusion_offset) * get_sizeof(dtype);
 
     total_compressed_size =
-        Compress(input_data, output, feedback_data, chunk_num_elems, dtype);
+        Compress(input_data, output, feedback_data, chunk_num_elems, dtype, ctx);
   } else {
     int64_t offset_cumm = 0;
     int64_t nelem = 0;
@@ -124,7 +124,7 @@ int64_t Compressor::Compress(
       if (!disable_error_feedback && error_feedback.isEnabled())
         feedback_data = error_feedback.GetData(entry) + offset;
       compressed_size =
-          Compress(input_data + offset, feedback_data, output, nelem, dtype);
+          Compress(input_data + offset, feedback_data, output, nelem, dtype, ctx);
       offset_cumm += entry.tensor->shape().num_elements();
       output += compressed_size;
       total_compressed_size += compressed_size;
@@ -138,10 +138,10 @@ void Compressor::Decompress(unsigned char* input_data,
                             unsigned char* output_data,
                             const std::vector<TensorTableEntry>& entries,
                             int64_t fusion_offset, int64_t chunk_num_elems,
-                            bool add) {
+                            bool add, void* ctx) {
   auto dtype = entries[0].tensor->dtype();
   if (entries.size() == 1) {
-    Decompress(input_data, output_data, chunk_num_elems, dtype, add);
+    Decompress(input_data, output_data, chunk_num_elems, dtype, add, ctx);
   } else {
     int64_t offset_cumm = 0;
     int64_t nelem = 0;
@@ -170,7 +170,7 @@ void Compressor::Decompress(unsigned char* input_data,
       }
       buffer_offset = std::max(offset_cumm - fusion_offset, 0l);
       output = output_data + buffer_offset * get_sizeof(dtype);
-      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add);
+      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add, ctx);
       cumm_decompressed += BufferSize(nelem, dtype);
       offset_cumm += entry.tensor->shape().num_elements();
     }
@@ -182,7 +182,7 @@ int64_t Compressor::Compress(
     unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     ErrorFeedback& error_feedback, int64_t fusion_offset, int64_t global_offset,
-    int64_t chunk_num_elems, bool original, bool disable_error_feedback) {
+    int64_t chunk_num_elems, bool original, bool disable_error_feedback, void* ctx) {
   auto get_tensor_data =
       [original](const horovod::common::TensorTableEntry& entry) {
         if (original)
@@ -200,7 +200,7 @@ int64_t Compressor::Compress(
       feedback_data = error_feedback.GetData(entries[0]) + offset;
     total_compressed_size =
         Compress(get_tensor_data(entries[0]) + offset, output, feedback_data,
-                 chunk_num_elems, dtype);
+                 chunk_num_elems, dtype, ctx);
   } else {
 
     int64_t offset_cumm = 0;
@@ -237,7 +237,7 @@ int64_t Compressor::Compress(
       if (!disable_error_feedback && error_feedback.isEnabled())
         feedback_data = error_feedback.GetData(entry) + offset;
       compressed_size =
-          Compress(tensor_data, output, feedback_data, nelem, dtype);
+          Compress(tensor_data, output, feedback_data, nelem, dtype, ctx);
       offset_cumm += entry.tensor->shape().num_elements();
       output += compressed_size;
       total_compressed_size += compressed_size;
@@ -251,14 +251,14 @@ void Compressor::Decompress(
     unsigned char* input_data,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     int64_t fusion_offset, int64_t global_offset, int64_t chunk_num_elems,
-    bool add) {
+    bool add, void* ctx) {
   auto dtype = entries[0].tensor->dtype();
   if (entries.size() == 1) {
     Decompress(input_data,
                ((unsigned char*)entries[0].output->data()) +
                    fusion_offset * get_sizeof(dtype) +
                    global_offset * get_sizeof(dtype),
-               chunk_num_elems, dtype, add);
+               chunk_num_elems, dtype, add, ctx);
   } else {
     int64_t offset_cumm = 0;
     int64_t nelem = 0;
@@ -289,7 +289,7 @@ void Compressor::Decompress(
       auto output = ((unsigned char*)entry.output->data()) +
                     buffer_offset * get_sizeof(dtype);
 
-      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add);
+      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add, ctx);
       cumm_decompressed += BufferSize(nelem, dtype);
       offset_cumm += entry.tensor->shape().num_elements();
     }
@@ -310,7 +310,7 @@ int64_t DummyCompressor::BufferSize(int num_elems,
 int64_t CPUDummyCompressor::Compress(unsigned char* input_data,
                                      unsigned char* output,
                                      unsigned char* feedback_data,
-                                     int64_t num_elems, DataType dtype) {
+                                     int64_t num_elems, DataType dtype, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   int64_t processed_size = num_elems * sizeof(float);
   std::memcpy(output, input_data, processed_size);
@@ -319,7 +319,7 @@ int64_t CPUDummyCompressor::Compress(unsigned char* input_data,
 
 void CPUDummyCompressor::Decompress(unsigned char* input_data,
                                     unsigned char* output, int64_t num_elems,
-                                    DataType dtype, bool add) {
+                                    DataType dtype, bool add, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   if (add) {
     float* output_f = (float*)output;
@@ -354,7 +354,7 @@ inline int64_t CPUMaxMinQuantizer::BufferSize(int num_elems, DataType dtype) {
 int64_t CPUMaxMinQuantizer::Compress(unsigned char* input_data,
                                      unsigned char* output,
                                      unsigned char* feedback_data,
-                                     int64_t num_elems, DataType dtype) {
+                                     int64_t num_elems, DataType dtype, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
   int64_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
@@ -373,7 +373,7 @@ int64_t CPUMaxMinQuantizer::Compress(unsigned char* input_data,
 
 void CPUMaxMinQuantizer::Decompress(unsigned char* input_data,
                                     unsigned char* output, int64_t num_elems,
-                                    DataType dtype, bool add) {
+                                    DataType dtype, bool add, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
   int64_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
@@ -476,7 +476,7 @@ inline int64_t CPUNormalizedQuantizer::BufferSize(int num_elems,
 int64_t CPUNormalizedQuantizer::Compress(unsigned char* input_data,
                                          unsigned char* output,
                                          unsigned char* feedback_data,
-                                         int64_t num_elems, DataType dtype) {
+                                         int64_t num_elems, DataType dtype, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
   int64_t meta_buffer_size = sizeof(float) * num_buckets;
@@ -496,7 +496,7 @@ int64_t CPUNormalizedQuantizer::Compress(unsigned char* input_data,
 void CPUNormalizedQuantizer::Decompress(unsigned char* input_data,
                                         unsigned char* output,
                                         int64_t num_elems, DataType dtype,
-                                        bool add) {
+                                        bool add, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
   int64_t meta_buffer_size = sizeof(float) * num_buckets;

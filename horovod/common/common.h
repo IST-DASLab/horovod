@@ -137,6 +137,7 @@ enum ReductionType {
   NCCL_Allgather,
   NCCL_ScatterAllgather,
   NCCL_Ring,
+  SHM_ScatterAllgather,
   NoneReduction
 };
 

@@ -6,6 +6,7 @@
 #include "reducers/mpi_ps.h"
 #include "reducers/mpi_ring.h"
 #include "reducers/mpi_scatter_allgather.h"
+#include "reducers/shm_scatter_allgather.h"
 #include "utils.h"
 
 #include <chrono>
@@ -27,20 +28,28 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
   auto summator = new GPUSummator(global_state, gpu_context);
   switch (reduction_type) {
   case ReductionType::AllGather:
-    mpiReducer = new MPI_Allreduce_AllGather(mpi_context, global_state,
-                                                compressor, summator);
+    mpiReducer = new MPI_Allreduce_AllGather(
+        mpi_context, gpu_context, global_state, compressor, summator);
     break;
   case ReductionType::Ring:
-    mpiReducer =
-        new MPI_Allreduce_Ring(mpi_context, global_state, compressor, summator);
+    mpiReducer = new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state,
+                                        compressor, summator);
     break;
   case ReductionType::ScatterAllgather:
     mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
-        mpi_context, global_state, compressor, summator);
+        mpi_context, gpu_context, global_state, compressor, summator);
     break;
   case ReductionType::PS:
-    mpiReducer = new MPI_Allreduce_PS(
-        mpi_context, global_state, compressor, summator);
+    mpiReducer = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
+                                      compressor, summator);
+    break;
+  case ReductionType::SHM_ScatterAllgather:
+    if (global_state->controller->GetSize() !=
+           global_state->controller->GetLocalSize()) {
+      throw std::logic_error("SHM_Allreduce_ScatterReduceAllgather is not available in multi-node setting.");
+    }
+    mpiReducer = new SHM_Allreduce_ScatterReduceAllgather(
+        mpi_context, gpu_context, global_state, compressor, summator);
     break;
   default:
     mpiReducer = nullptr;
@@ -53,7 +62,7 @@ MPI_GPUCompressedAllReduce::~MPI_GPUCompressedAllReduce() { delete mpiReducer; }
 Status MPI_GPUCompressedAllReduce::Allreduce(
     int64_t num_elements, MPI_Comm comm,
     std::vector<horovod::common::TensorTableEntry>& entries, int buffer_len) {
-  Status status = mpiReducer->Init(entries);
+  Status status = mpiReducer->Init(entries, comm);
   if (!status.ok()) {
     return status;
   }
@@ -71,14 +80,14 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
            buffer_len % tensor_fusion_threshold != 0)
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
-      status = mpiReducer->AllreduceDivision(num_elements_division, comm,
-                                             entries, global_offset);
+      status = mpiReducer->AllreduceDivision(num_elements_division, entries,
+                                             global_offset);
       if (!status.ok())
         break;
       global_offset += (tensor_fusion_threshold / sizeof(float));
     }
   } else {
-    status = mpiReducer->AllreduceDivision(num_elements, comm, entries, 0l);
+    status = mpiReducer->AllreduceDivision(num_elements, entries, 0l);
   }
   return status;
 }
@@ -109,7 +118,9 @@ bool MPI_GPUCompressedAllReduce::Enabled(
     const std::vector<TensorTableEntry>& entries,
     const horovod::common::Response& response) const {
   if (mpiReducer == nullptr ||
-      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) * sizeof(float) < BUFFER_THRESHOLD ||
+      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *
+              sizeof(float) <
+          BUFFER_THRESHOLD ||
       !EnabledName(entries[0].tensor_name) ||
       !(entries[0].tensor->dtype() == HOROVOD_FLOAT32 ||
         entries[0].tensor->dtype() == HOROVOD_FLOAT16) ||

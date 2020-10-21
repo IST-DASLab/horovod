@@ -25,15 +25,16 @@ namespace common {
 class MPI_Allreduce_ScatterReduceAllgather : public MPIReducer {
 public:
   MPI_Allreduce_ScatterReduceAllgather(MPIContext* mpi_context,
+                                       GPUContext* gpu_context,
                                        HorovodGlobalState* global_state,
                                        Compressor* compressor,
                                        Summator* summator);
 
-  Status AllreduceDivision(int num_elements, MPI_Comm comm,
+  Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
                            int64_t global_offset) override;
 
-  Status Init(const std::vector<TensorTableEntry>& entries) override;
+  Status Init(const std::vector<TensorTableEntry>& entries, MPI_Comm comm) override;
 };
 
 } // namespace common

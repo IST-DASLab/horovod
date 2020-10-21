@@ -5,7 +5,7 @@
 namespace horovod {
 namespace common {
 
-const int BUFFER_THRESHOLD = 10000;
+const int BUFFER_THRESHOLD = 1;
 const float QUANTIZE_MULTIPLIER = 0.5;
 
 Compressor* CreateGPUCompressor(GPUContext* gpu_context,

@@ -68,7 +68,7 @@ Status NCCL_Allreduce_AllGather::AllreduceDivision(
       compressor_->BufferSize(num_elements, entries, 0, global_offset);
   unsigned char* send_buf = gradients_recv_ + rank * send_rcv_size;
   compressor_->Compress(send_buf, entries, error_feedback_, 0, global_offset,
-                        num_elements);
+                        num_elements, true, false, stream_);
   if (global_state_->timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_COMPRESSION,
                               *stream_);
@@ -85,14 +85,14 @@ Status NCCL_Allreduce_AllGather::AllreduceDivision(
   }
   unsigned char* recv_buf = gradients_recv_;
   compressor_->Decompress(send_buf, entries, 0, global_offset, num_elements,
-                          false);
+                          false, stream_);
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank == rank) {
       recv_buf += send_rcv_size;
       continue;
     }
     compressor_->Decompress(recv_buf, entries, 0, global_offset, num_elements,
-                            true);
+                            true, stream_);
     recv_buf += send_rcv_size;
   }
   if (global_state_->timeline.Initialized()) {

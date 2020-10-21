@@ -27,8 +27,7 @@ Status NCCL_Allreduce_Ring::Init(
   int64_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
   auto dtype = entries[0].tensor->dtype();
   int64_t allocated_compression_buffer_size_send =
-      round_to(compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype),
-               ALIGNMENT_UNIT);
+      ALIGNED_SIZE(compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype));
   int64_t allocated_compression_buffer_size_recv =
       allocated_compression_buffer_size_send;
   int64_t buffer_size = allocated_compression_buffer_size_send * world_size +
@@ -103,14 +102,12 @@ Status NCCL_Allreduce_Ring::AllreduceDivision(
         (segment_ends[recv_segment_idx] - segment_size(recv_segment_idx));
 
     recv_size =
-        round_to(compressor_->BufferSize(segment_size(recv_segment_idx),
-                                         entries, buf_recv_idx, global_offset),
-                 ALIGNMENT_UNIT);
+        ALIGNED_SIZE(compressor_->BufferSize(segment_size(recv_segment_idx),
+                                         entries, buf_recv_idx, global_offset));
     send_size =
-        round_to(compressor_->Compress(
+        ALIGNED_SIZE(compressor_->Compress(
             gradients_send_, entries, error_feedback_, buf_send_idx,
-            global_offset, segment_size(send_segment_idx), i == 0),
-                 ALIGNMENT_UNIT);
+            global_offset, segment_size(send_segment_idx), i == 0, false, stream_));
     NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart(), *nccl_comm_);
     NCCL_CALL_CHECK("ncclSend", ncclSend(gradients_send_, send_size, ncclChar, send_to,
                                          *nccl_comm_, *stream_), *nccl_comm_);
@@ -119,20 +116,19 @@ Status NCCL_Allreduce_Ring::AllreduceDivision(
     NCCL_CALL_CHECK("ncclGroupEnd", ncclGroupEnd(), *nccl_comm_);
     compressor_->Decompress(gradients_recv_, entries, buf_recv_idx,
                             global_offset, segment_size(recv_segment_idx),
-                            true);
+                            true, (void*)stream_);
   }
 
   send_segment_idx = (rank + world_size + 1) % world_size;
   buf_send_idx =
       (segment_ends[send_segment_idx] - segment_size(send_segment_idx));
   unsigned char* send_buf = gradients_send_;
-  send_size = round_to(compressor_->Compress(send_buf, entries, error_feedback_,
+  send_size = ALIGNED_SIZE(compressor_->Compress(send_buf, entries, error_feedback_,
                                              buf_send_idx, global_offset,
                                              segment_size(send_segment_idx),
-                                             false, true),
-                       ALIGNMENT_UNIT);
+                                             false, true, stream_));
   compressor_->Decompress(send_buf, entries, buf_send_idx, global_offset,
-                          segment_size(send_segment_idx), false);
+                          segment_size(send_segment_idx), false, stream_);
 
   unsigned char* recv_buf = send_buf + send_size;
   unsigned char* compressed_buf = recv_buf;
@@ -144,9 +140,8 @@ Status NCCL_Allreduce_Ring::AllreduceDivision(
     buf_recv_idx =
         (segment_ends[recv_segment_idx] - segment_size(recv_segment_idx));
     recv_size =
-        round_to(compressor_->BufferSize(segment_size(recv_segment_idx),
-                                         entries, buf_recv_idx, global_offset),
-                 ALIGNMENT_UNIT);
+        ALIGNED_SIZE(compressor_->BufferSize(segment_size(recv_segment_idx),
+                                         entries, buf_recv_idx, global_offset));
     NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart(), *nccl_comm_);
 
     // Segment to recv - at every iteration we receive segment (r-i)
@@ -169,13 +164,11 @@ Status NCCL_Allreduce_Ring::AllreduceDivision(
 
     compressor_->Decompress(compressed_buf, entries, buf_recv_idx,
                             global_offset, segment_size(recv_segment_idx),
-                            false);
+                            false, stream_);
 
     recv_size =
-        round_to(compressor_->BufferSize(segment_size(recv_segment_idx),
-                                         entries, buf_recv_idx, global_offset),
-                 ALIGNMENT_UNIT);
-
+        ALIGNED_SIZE(compressor_->BufferSize(segment_size(recv_segment_idx),
+                                         entries, buf_recv_idx, global_offset));
     compressed_buf += recv_size;
   }
   return Status::OK();

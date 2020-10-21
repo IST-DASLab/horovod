@@ -161,7 +161,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
         for p, (handle, ctx) in self._handles.items():
             output = synchronize(handle)
             self._allreduce_delay[p] = self.backward_passes_per_step
-            p.grad.set_(self._compression.decompress(output, ctx))
+            p.grad.copy_(self._compression.decompress(output, ctx))
         self._handles.clear()
 
         self._synchronized = True

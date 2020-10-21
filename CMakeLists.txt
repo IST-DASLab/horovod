@@ -135,13 +135,15 @@ endif()
 
 if ("$ENV{HOROVOD_GRAD_COMPRESSION}" STREQUAL "1")
     if (NOT HAVE_MPI)
-        message(FATAL_ERROR "Grad compression doesn't work wothout MPI")
+        message(FATAL_ERROR "Grad compression doesn't work without MPI")
     endif()
     list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/mpi_compressed_operations.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_allgather.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_scatter_allgather.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_ring.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_ps.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/shm_scatter_allgather.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/shm_utils.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/compressor.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/common.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/error_feedback.cc"

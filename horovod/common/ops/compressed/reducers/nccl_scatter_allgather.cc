@@ -108,10 +108,9 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     int start_offset =
         (num_elems_per_node * node_rank) + std::min(residue, node_rank);
     send_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
-    send_compressed_size = round_to(
+    send_compressed_size = ALIGNED_SIZE(
         compressor_->Compress(send_buf, entries, error_feedback_, start_offset,
-                              global_offset, send_num_elems),
-        ALIGNMENT_UNIT);
+                              global_offset, send_num_elems, true, false, stream_));
     send_buf += send_compressed_size;
     send_sizes.push(send_compressed_size);
   }
@@ -143,14 +142,14 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
   recv_buf = gradients_recv_;
   for (int i = 0; i < world_size - 1; i++) {
     compressor_->Decompress(recv_buf, entries, start_elem, global_offset,
-                            recv_num_elems, true);
+                            recv_num_elems, true, stream_);
     recv_buf += recv_compressed_size;
   }
 
   compressor_->Compress(gradients_send_, entries, error_feedback_, start_elem,
-                        global_offset, recv_num_elems, false, true);
+                        global_offset, recv_num_elems, false, true, stream_);
   compressor_->Decompress(gradients_send_, entries, start_elem, global_offset,
-                          recv_num_elems, false);
+                          recv_num_elems, false, stream_);
   if (timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_DECOMPRESSION,
                               *stream_);
@@ -168,9 +167,8 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
         (num_elems_per_node * node_rank) + std::min(residue, node_rank);
     recv_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
     recv_compressed_size =
-        round_to(compressor_->BufferSize(recv_num_elems, entries,
-                                         their_start_offset, global_offset),
-                 ALIGNMENT_UNIT);
+        ALIGNED_SIZE(compressor_->BufferSize(recv_num_elems, entries,
+                                         their_start_offset, global_offset));
     NCCL_CALL_CHECK("ncclRecv", ncclRecv(recv_buf, recv_compressed_size,
                                          ncclChar, node_rank, *comm, *stream_), *comm);
     NCCL_CALL_CHECK("ncclSend", ncclSend(gradients_send_, send_compressed_size,
@@ -193,11 +191,10 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
         (num_elems_per_node * node_rank) + std::min(residue, node_rank);
     recv_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
     recv_compressed_size =
-        round_to(compressor_->BufferSize(recv_num_elems, entries,
-                                         their_start_offset, global_offset),
-                 ALIGNMENT_UNIT);
+        ALIGNED_SIZE(compressor_->BufferSize(recv_num_elems, entries,
+                                         their_start_offset, global_offset));
     compressor_->Decompress(recv_buf, entries, their_start_offset,
-                            global_offset, recv_num_elems, false);
+                            global_offset, recv_num_elems, false, stream_);
     recv_buf += recv_compressed_size;
   }
   if (timeline.Initialized()) {

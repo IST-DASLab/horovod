@@ -15,7 +15,6 @@ public:
         global_state_(global_state) {}
 
   Status Init(const std::vector<TensorTableEntry>& entries);
-  void Finalize();
 
   GPUContext* gpu_context_;
   GPUOpContext gpu_op_context_;
@@ -23,7 +22,6 @@ public:
   CurandState* cuda_states_ = nullptr;
   int device_;
   FusionBufferManager bufferManager_;
-  gpuStream_t* stream_;
 };
 
 class GPUDummyCompressor : public DummyCompressor {
@@ -35,9 +33,9 @@ public:
   }
 
   int64_t Compress(unsigned char* input, unsigned char* output,
-                   unsigned char* feedback, int64_t num_elems, DataType dtype) override;
+                   unsigned char* feedback, int64_t num_elems, DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add) override;
+                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
   Status Init(const std::vector<TensorTableEntry>& entries) override;
   void Finalize() override;
 
@@ -57,9 +55,9 @@ public:
   Status Init(const std::vector<TensorTableEntry>& entries) override;
   int64_t Compress(unsigned char* input, unsigned char* output,
                    unsigned char* feedback, int64_t num_elems,
-                   DataType dtype) override;
+                   DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add) override;
+                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
   int64_t BufferSize(int num_elems, DataType dtype) final;
   void Finalize();
 
@@ -86,9 +84,9 @@ public:
   int64_t BufferSize(int num_elems, DataType dtype) final;
   int64_t Compress(unsigned char* input, unsigned char* output,
                    unsigned char* feedback, int64_t num_elems,
-                   DataType dtype) override;
+                   DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add) override;
+                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
 
 protected:
   Half* levels_fp16_;

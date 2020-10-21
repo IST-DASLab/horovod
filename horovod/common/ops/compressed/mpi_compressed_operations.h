@@ -9,7 +9,7 @@ namespace common {
 
 class MPI_CompressedAllReduce: public MPIAllreduce {
 public:
-  MPI_CompressedAllReduce(MPIContext *mpi_context,
+  MPI_CompressedAllReduce(MPIContext *mpi_context, GPUContext* gpu_context,
                              HorovodGlobalState *global_state);
   virtual ~MPI_CompressedAllReduce();
   Status Execute(std::vector<TensorTableEntry>& entries,

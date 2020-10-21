@@ -10,7 +10,7 @@ namespace horovod {
 namespace common {
 
 MPI_CompressedAllReduce::MPI_CompressedAllReduce(
-    MPIContext* mpi_context, HorovodGlobalState* global_state)
+    MPIContext* mpi_context, GPUContext* gpu_context, HorovodGlobalState* global_state)
     : MPIAllreduce(mpi_context, global_state) {
   auto reduction_type = GetEnumEnvOrDefault<ReductionType>(
       HOROVOD_REDUCTION, ReductionType::NoneReduction);
@@ -40,20 +40,20 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
   auto summator = new CPUSummator();
   switch (reduction_type) {
   case ReductionType::AllGather:
-    mpiReducer = new MPI_Allreduce_AllGather(mpi_context, global_state,
+    mpiReducer = new MPI_Allreduce_AllGather(mpi_context, gpu_context, global_state,
                                                 compressor, summator);
     break;
   case ReductionType::Ring:
     mpiReducer =
-        new MPI_Allreduce_Ring(mpi_context, global_state, compressor, summator);
+        new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state, compressor, summator);
     break;
   case ReductionType::ScatterAllgather:
     mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
-        mpi_context, global_state, compressor, summator);
+        mpi_context, gpu_context, global_state, compressor, summator);
     break;
   case ReductionType::PS:
     mpiReducer = new MPI_Allreduce_PS(
-        mpi_context, global_state, compressor, summator);
+        mpi_context, gpu_context, global_state, compressor, summator);
     break;
   default:
     mpiReducer = nullptr;
@@ -68,7 +68,7 @@ MPI_CompressedAllReduce::~MPI_CompressedAllReduce() {
 Status MPI_CompressedAllReduce::Allreduce(
     int num_elements, MPI_Comm comm,
     std::vector<horovod::common::TensorTableEntry>& entries, int buffer_len) {
-  Status status = mpiReducer->Init(entries);
+  Status status = mpiReducer->Init(entries, comm);
   if (!status.ok()) {
     return status;
   }
@@ -86,14 +86,14 @@ Status MPI_CompressedAllReduce::Allreduce(
            buffer_len % tensor_fusion_threshold != 0)
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
-      status = mpiReducer->AllreduceDivision(num_elements_division, comm, entries,
+      status = mpiReducer->AllreduceDivision(num_elements_division, entries,
                                     global_offset);
       if (!status.ok())
         break;
       global_offset += (tensor_fusion_threshold / sizeof(float));
     }
   } else {
-    status = mpiReducer->AllreduceDivision(num_elements, comm, entries, 0l);
+    status = mpiReducer->AllreduceDivision(num_elements, entries, 0l);
   }
   return status;
 }

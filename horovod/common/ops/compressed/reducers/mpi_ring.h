@@ -7,14 +7,16 @@ namespace common {
 
 class MPI_Allreduce_Ring : public MPIReducer {
 public:
-  MPI_Allreduce_Ring(MPIContext* mpi_context, HorovodGlobalState* global_state,
-                     Compressor* compressor, Summator* summator);
+  MPI_Allreduce_Ring(MPIContext* mpi_context, GPUContext* gpu_context,
+                     HorovodGlobalState* global_state, Compressor* compressor,
+                     Summator* summator);
 
-  Status AllreduceDivision(int num_elements, MPI_Comm comm,
+  Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
                            int64_t glovbal_offset) override;
 
-  Status Init(const std::vector<TensorTableEntry>& entries) override;
+  Status Init(const std::vector<TensorTableEntry>& entries,
+              MPI_Comm comm) override;
 };
 
 } // namespace common

@@ -10,17 +10,11 @@ namespace common {
 // Cuda Compression Context
 // ======
 
-// TODO: Add compressions/decompressions in multiple streams.
-void GPUCompressionContext::Finalize() {
-  gpu_context_->StreamSynchronize(*stream_);
-}
-
 Status
 GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   device_ = first_entry.device;
   gpu_op_context_.InitGPU(entries);
-  stream_ = &gpu_context_->streams[global_state_->current_nccl_stream][device_];
 
   int chunk_size =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
@@ -42,7 +36,8 @@ GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
     cuda_states_ = static_cast<CurandState*>(
         const_cast<void*>(buffer->AccessData(first_entry.context)));
     CUDA_init_curand(
-        cuda_states_, num_elems_in_chunk, time(NULL), *stream_);
+        cuda_states_, num_elems_in_chunk, time(NULL),
+        gpu_context_->streams[global_state_->current_nccl_stream][device_]);
   }
   return Status::OK();
 }
@@ -54,34 +49,35 @@ Status GPUDummyCompressor::Init(const std::vector<TensorTableEntry>& entries) {
 int64_t GPUDummyCompressor::Compress(unsigned char* input_data,
                                      unsigned char* output,
                                      unsigned char* feedback_data,
-                                     int64_t num_elems, DataType dtype) {
+                                     int64_t num_elems, DataType dtype,
+                                     void* ctx) {
+  cudaStream_t* stream = (cudaStream_t*)ctx;
   int64_t processed_size = num_elems * get_sizeof(dtype);
 
   gpu_compression_context_->gpu_context_->MemcpyAsyncD2D(
-      (void*)output, (void*)input_data, processed_size,
-      *gpu_compression_context_->stream_);
+      (void*)output, (void*)input_data, processed_size, *stream);
   return processed_size;
 }
 
 void GPUDummyCompressor::Decompress(unsigned char* input_data,
                                     unsigned char* output, int64_t num_elems,
-                                    DataType dtype, bool add) {
+                                    DataType dtype, bool add, void* ctx) {
+  cudaStream_t* stream = (cudaStream_t*)ctx;
   int64_t processed_size = num_elems * get_sizeof(dtype);
-  auto stream_p = gpu_compression_context_->stream_;
   if (add) {
     if (dtype == DataType::HOROVOD_FLOAT32)
-      CUDA_add_fp32(num_elems, (float*)input_data, (float*)output, (float*)output,
-               *stream_p);
+      CUDA_add_fp32(num_elems, (float*)input_data, (float*)output,
+                    (float*)output, *stream);
     else
       CUDA_add_fp16(num_elems, (Half*)input_data, (Half*)output, (Half*)output,
-               *stream_p);
+                    *stream);
   } else {
     gpu_compression_context_->gpu_context_->MemcpyAsyncD2D(
-        (void*)output, (void*)input_data, processed_size, *stream_p);
+        (void*)output, (void*)input_data, processed_size, *stream);
   }
 }
 
-void GPUDummyCompressor::Finalize() { gpu_compression_context_->Finalize(); }
+void GPUDummyCompressor::Finalize() {}
 // ================
 // Max Min Quantizer
 // ================
@@ -94,32 +90,30 @@ Status GPUMaxMinQuantizer::Init(
 int64_t GPUMaxMinQuantizer::Compress(unsigned char* input,
                                      unsigned char* output,
                                      unsigned char* feedback, int64_t num_elems,
-                                     DataType dtype) {
+                                     DataType dtype, void* ctx) {
+  cudaStream_t* stream = (cudaStream_t*)ctx;
   if (dtype != DataType::HOROVOD_FLOAT16) {
-    CUDA_quantize_maxmin_fp32(
-        input, output, feedback, num_elems, bits_, bucket_size_,
-        gpu_compression_context_->cuda_states_,
-        *gpu_compression_context_->stream_);
+    CUDA_quantize_maxmin_fp32(input, output, feedback, num_elems, bits_,
+                              bucket_size_,
+                              gpu_compression_context_->cuda_states_, *stream);
   } else {
-    CUDA_quantize_maxmin_fp16(
-        input, output, feedback, num_elems, bits_, bucket_size_,
-        gpu_compression_context_->cuda_states_,
-        *gpu_compression_context_->stream_);
+    CUDA_quantize_maxmin_fp16(input, output, feedback, num_elems, bits_,
+                              bucket_size_,
+                              gpu_compression_context_->cuda_states_, *stream);
   }
   return BufferSize(num_elems, dtype);
 }
 
 void GPUMaxMinQuantizer::Decompress(unsigned char* input, unsigned char* output,
-                                    int64_t num_elems, DataType dtype,
-                                    bool add) {
+                                    int64_t num_elems, DataType dtype, bool add,
+                                    void* ctx) {
+  cudaStream_t* stream = (cudaStream_t*)ctx;
   if (dtype != DataType::HOROVOD_FLOAT16) {
-    CUDA_dequantize_maxmin_fp32(
-        input, output, num_elems, bits_, bucket_size_, add,
-        *gpu_compression_context_->stream_);
+    CUDA_dequantize_maxmin_fp32(input, output, num_elems, bits_, bucket_size_,
+                                add, *stream);
   } else {
-    CUDA_dequantize_maxmin_fp16(
-        input, output, num_elems, bits_, bucket_size_, add,
-        *gpu_compression_context_->stream_);
+    CUDA_dequantize_maxmin_fp16(input, output, num_elems, bits_, bucket_size_,
+                                add, *stream);
   }
 }
 
@@ -131,7 +125,7 @@ inline int64_t GPUMaxMinQuantizer::BufferSize(int num_elems, DataType dtype) {
          round_to(compressed_values_buffer_size, ALIGNMENT_UNIT);
 }
 
-void GPUMaxMinQuantizer::Finalize() { gpu_compression_context_->Finalize(); }
+void GPUMaxMinQuantizer::Finalize() {}
 
 // ================
 // Normalized Quantizers
@@ -183,7 +177,6 @@ void GPUNormalizedQuantizer::SetQuantizationLevels(float* levels) {
 }
 
 void GPUNormalizedQuantizer::Finalize() {
-  gpu_compression_context_->Finalize();
 }
 
 inline int64_t GPUNormalizedQuantizer::BufferSize(int num_elems,
@@ -198,17 +191,19 @@ inline int64_t GPUNormalizedQuantizer::BufferSize(int num_elems,
 int64_t GPUNormalizedQuantizer::Compress(unsigned char* input,
                                          unsigned char* output,
                                          unsigned char* feedback,
-                                         int64_t num_elems, DataType dtype) {
+                                         int64_t num_elems, DataType dtype,
+                                         void* ctx) {
+  cudaStream_t* stream = (cudaStream_t*)ctx;
   if (dtype != DataType::HOROVOD_FLOAT16) {
-    CUDA_quantize_Norm_fp32(
-        input, output, feedback, levels_, num_elems, bits_, bucket_size_,
-        gpu_compression_context_->cuda_states_, norm_type_, levels_type_,
-        *gpu_compression_context_->stream_);
+    CUDA_quantize_Norm_fp32(input, output, feedback, levels_, num_elems, bits_,
+                            bucket_size_,
+                            gpu_compression_context_->cuda_states_, norm_type_,
+                            levels_type_, *stream);
   } else {
-    CUDA_quantize_Norm_fp16(
-        input, output, feedback, levels_fp16_, num_elems, bits_, bucket_size_,
-        gpu_compression_context_->cuda_states_, norm_type_, levels_type_,
-        *gpu_compression_context_->stream_);
+    CUDA_quantize_Norm_fp16(input, output, feedback, levels_fp16_, num_elems,
+                            bits_, bucket_size_,
+                            gpu_compression_context_->cuda_states_, norm_type_,
+                            levels_type_, *stream);
   }
   return BufferSize(num_elems, dtype);
 }
@@ -216,17 +211,14 @@ int64_t GPUNormalizedQuantizer::Compress(unsigned char* input,
 void GPUNormalizedQuantizer::Decompress(unsigned char* input,
                                         unsigned char* output,
                                         int64_t num_elems, DataType dtype,
-                                        bool add) {
+                                        bool add, void* ctx) {
+  cudaStream_t* stream = (cudaStream_t*)ctx;
   if (dtype != DataType::HOROVOD_FLOAT16) {
-    CUDA_dequantize_Norm_fp32(
-        input, output, levels_, num_elems, bits_, bucket_size_, levels_type_,
-        add,
-        *gpu_compression_context_->stream_);
+    CUDA_dequantize_Norm_fp32(input, output, levels_, num_elems, bits_,
+                              bucket_size_, levels_type_, add, *stream);
   } else {
-    CUDA_dequantize_Norm_fp16(
-        input, output, levels_fp16_, num_elems, bits_, bucket_size_,
-        levels_type_, add,
-        *gpu_compression_context_->stream_);
+    CUDA_dequantize_Norm_fp16(input, output, levels_fp16_, num_elems, bits_,
+                              bucket_size_, levels_type_, add, *stream);
   }
 }
 
