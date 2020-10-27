@@ -106,7 +106,7 @@ Status MPI_Allreduce_AllGather::AllreduceDivision(
     compressor_->Decompress(gradients_recv_ + i * send_rcv_size, entries, 0,
                             global_offset, num_elements, true, (void*)&stream);
   }
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   compressor_->Finalize();
   timeline.ActivityEndAll(entries);
   return Status::OK();

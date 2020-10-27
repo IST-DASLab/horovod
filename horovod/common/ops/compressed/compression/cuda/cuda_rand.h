@@ -1,4 +1,9 @@
 #include <climits>
+#include "cuda_def.h"
+
+namespace horovod {
+namespace common {
+namespace cuda {
 
 __device__ int toInt(unsigned char* z) {
   return ((unsigned int)z[0] & 0xFF) << 24 | ((unsigned int)z[1] & 0xFF) << 16 |
@@ -79,3 +84,12 @@ void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
   _init_curand<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
                  stream>>>(seed, states);
 }
+
+int CUDA_get_curand_array_size(int num_elems) {
+  return BLOCKS_PER_GRID(num_elems) * MAX_THREADS_PER_BLOCK *
+         sizeof(CurandState);
+}
+
+} // namespace cuda
+} // namespace common
+} // namespace horovod

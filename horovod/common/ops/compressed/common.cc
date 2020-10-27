@@ -1,4 +1,5 @@
 #include "common.h"
+#include "compression/gpu_compressor.h"
 
 namespace horovod {
 namespace common {

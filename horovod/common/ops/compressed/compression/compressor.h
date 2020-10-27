@@ -15,9 +15,9 @@ public:
   // assume that no compression will be done in-place.
   virtual ~Compressor() = default;
   virtual int64_t BufferSize(int num_elems, DataType dtype) = 0;
-  virtual int64_t BufferSize(int num_elems,
-                                const std::vector<TensorTableEntry>& entries,
-                             int64_t fusion_offset, int64_t global_offset);
+  int64_t BufferSize(int num_elems,
+                     const std::vector<TensorTableEntry>& entries,
+                     int64_t fusion_offset, int64_t global_offset);
   // Returns size of compressed size (in bytes). And update error_feedback.
   // If error_feedback is nullptr, it's not updated.
   virtual int64_t Compress(unsigned char* input_data, unsigned char* output,
@@ -26,7 +26,8 @@ public:
   // Decompress data from input to output.
   // If add is True sum decompressed data with output.
   virtual void Decompress(unsigned char* input, unsigned char* output,
-                          int64_t num_elems, DataType dtype, bool add, void* ctx) = 0;
+                          int64_t num_elems, DataType dtype, bool add,
+                          void* ctx) = 0;
   // Compresses input_data into output per entry. Returns size of compressed
   // data.
   int64_t Compress(unsigned char* input_data, unsigned char* output,
@@ -46,8 +47,7 @@ public:
                    const std::vector<TensorTableEntry>& entries,
                    ErrorFeedback& error_feedback, int64_t fusion_offset,
                    int64_t global_offset, int64_t chunk_num_elems,
-                   bool original, bool disable_error_feedback,
-                   void* ctx);
+                   bool original, bool disable_error_feedback, void* ctx);
   // Decompresses input_data into entries.
   void Decompress(unsigned char* input_data,
                   const std::vector<TensorTableEntry>& entries,
@@ -57,6 +57,7 @@ public:
   virtual void Finalize();
   virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
   virtual void SetQuantizationLevels(float* levels);
+
 protected:
   // The size of the bucket.
   int bucket_size_;
@@ -81,9 +82,11 @@ public:
       : DummyCompressor(global_state) {}
 
   int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems, DataType dtype, void* ctx) override;
+                   unsigned char* feedback_data, int64_t num_elems,
+                   DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
+                  int64_t num_elems, DataType dtype, bool add,
+                  void* ctx) override;
 };
 
 class CPURandomizer {
@@ -123,9 +126,11 @@ public:
   CPUMaxMinQuantizer(HorovodGlobalState* global_state, int quantization_bits)
       : MaxMinQuantizer(global_state, quantization_bits) {}
   int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems, DataType dtype, void* ctx) override;
+                   unsigned char* feedback_data, int64_t num_elems,
+                   DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
+                  int64_t num_elems, DataType dtype, bool add,
+                  void* ctx) override;
   void CompressBucket(unsigned char* input_data, float* meta_info_buffer,
                       unsigned char* output, unsigned char* feedback_data,
                       int64_t num_elems, int64_t bucket_no);
@@ -143,9 +148,12 @@ private:
 class NormalizedQuantizer : public Quantizer {
 public:
   NormalizedQuantizer(horovod::common::HorovodGlobalState* global_state,
-                      int quantization_bits, CompressionType compression_type, NormType norm_type, LevelsType levels_type)
-      : Quantizer(global_state, quantization_bits), compression_type_(compression_type), norm_type_(norm_type), levels_type_(levels_type){
-  }
+                      int quantization_bits, CompressionType compression_type,
+                      NormType norm_type, LevelsType levels_type)
+      : Quantizer(global_state, quantization_bits),
+        compression_type_(compression_type), norm_type_(norm_type),
+        levels_type_(levels_type) {}
+
 protected:
   // Buffer to store static levels. Won't be sent.
   float* levels_ = nullptr;
@@ -158,14 +166,19 @@ protected:
 class CPUNormalizedQuantizer : public NormalizedQuantizer {
 public:
   CPUNormalizedQuantizer(horovod::common::HorovodGlobalState* global_state,
-                         int quantization_bits, CompressionType compression_type, NormType norm_type, LevelsType levels_type)
-      : NormalizedQuantizer(global_state, quantization_bits, compression_type, norm_type, levels_type) {}
+                         int quantization_bits,
+                         CompressionType compression_type, NormType norm_type,
+                         LevelsType levels_type)
+      : NormalizedQuantizer(global_state, quantization_bits, compression_type,
+                            norm_type, levels_type) {}
   Status
   Init(const std::vector<horovod::common::TensorTableEntry>& entries) override;
   int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems, DataType dtype, void* ctx) override;
+                   unsigned char* feedback_data, int64_t num_elems,
+                   DataType dtype, void* ctx) override;
   void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
+                  int64_t num_elems, DataType dtype, bool add,
+                  void* ctx) override;
 
   unsigned char EncodeValue(float input, float* feedback, float norm);
 

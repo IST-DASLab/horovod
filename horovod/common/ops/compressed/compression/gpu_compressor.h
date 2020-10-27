@@ -1,8 +1,6 @@
 #ifndef HOROVOD_GPU_COMPRESSOR_H
 #define HOROVOD_GPU_COMPRESSOR_H
-#include "../../gpu_operations.h"
 #include "compressor.h"
-#include "cuda/cuda_functions.h"
 
 namespace horovod {
 namespace common {

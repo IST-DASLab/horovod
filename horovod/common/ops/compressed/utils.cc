@@ -1,5 +1,5 @@
 #include "utils.h"
-#include "compression/cuda/cuda_functions.h"
+#include "compression/cuda/cuda_def.h"
 #include <stdexcept>
 
 namespace horovod {

@@ -1,6 +1,7 @@
 #ifndef HOROVOD_COMPRESSION_REDUCTION_COMMON_H
 #define HOROVOD_COMPRESSION_REDUCTION_COMMON_H
 #include "../../../mpi/mpi_context.h"
+#include "../common.h"
 
 #define MPI_CHECK(condition)                                                   \
   do {                                                                         \
@@ -8,16 +9,6 @@
     if (op != MPI_SUCCESS) {                                                   \
       throw std::runtime_error(std::string(#condition) + " on line " +         \
                                std::to_string(__LINE__) + " failed: ");        \
-    }                                                                          \
-  } while (0)
-
-#define CUDA_CHECK(cmd)                                                        \
-  do {                                                                         \
-    cudaError_t e = cmd;                                                       \
-    if (e != cudaSuccess) {                                                    \
-      printf("Failed: Cuda error %s:%d '%s'\n", __FILE__, __LINE__,            \
-             cudaGetErrorString(e));                                           \
-      exit(EXIT_FAILURE);                                                      \
     }                                                                          \
   } while (0)
 

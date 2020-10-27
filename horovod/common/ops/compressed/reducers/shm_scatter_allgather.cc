@@ -117,8 +117,6 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   std::map<int, int> cumm_compressed_offsets;
   auto first_entry = entries[0];
   unsigned char* compressed_buf = gradients_send_;
-  //  if (rank == 0)
-  //    std::cout << "AllreduceDivision: " << entries.size() << std::endl;
   // First round of SRA.
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank == rank) {
@@ -141,23 +139,40 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   }
 
   std::vector<int> indices;
-  for (int node_rank = 0; node_rank < world_size; node_rank++) {
+  int node_rank;
+  for (node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank != rank)
       indices.push_back(node_rank);
   }
+  // Receive buffers
   while (indices.size() > 0) {
     for (auto it = indices.begin(); it != indices.end();) {
-      int node_rank = *it;
+      node_rank = *it;
       if (shm_comm_->recvBufAsync((void**)&peer_buf, 0, node_rank,
                                   streams_[node_rank]) == 0) {
         it = indices.erase(it);
-        int idx = node_rank - (node_rank > rank) ? 1 : 0;
+        int idx = node_rank - ((node_rank > rank) ? 1 : 0);
         CUDA_CHECK(cudaMemcpyAsync(gradients_recv_ + idx * recv_compressed_size,
                                    peer_buf, recv_compressed_size,
                                    cudaMemcpyDeviceToDevice,
                                    streams_[node_rank]));
         CUDA_CHECK(cudaEventRecord(events_[node_rank], streams_[node_rank]));
-        CUDA_CHECK(cudaStreamWaitEvent(streams_[rank], events_[node_rank], 0));
+      } else {
+        it++;
+      }
+    }
+  }
+  for (node_rank = 0; node_rank < world_size; node_rank++) {
+    if (node_rank != rank)
+      indices.push_back(node_rank);
+  }
+  // Decompress received buffers.
+  while (indices.size() > 0) {
+    for (auto it = indices.begin(); it != indices.end();) {
+      node_rank = *it;
+      if (cudaEventQuery(events_[node_rank]) == cudaSuccess) {
+        it = indices.erase(it);
+        int idx = node_rank - ((node_rank > rank) ? 1 : 0);
         compressor_->Decompress(gradients_recv_ + idx * recv_compressed_size,
                                 entries, start_elem, global_offset,
                                 recv_num_elems, true, &streams_[rank]);
@@ -174,7 +189,6 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   CUDA_CHECK(cudaEventRecord(events_[rank], streams_[rank]));
   compressor_->Decompress(compressed_buf, entries, start_elem, global_offset,
                           recv_num_elems, false, &streams_[rank]);
-
   compressed_size = recv_compressed_size;
   shm_comm_->waitSendAll();
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
