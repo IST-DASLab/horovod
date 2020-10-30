@@ -232,7 +232,7 @@ __global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
       T d = DecodeValue<T, FUNC>(encoded_value, meta_info, i * PACK_SIZE + j,
                                  bucket_size, bits, ctx);
       if (ADD) {
-        output[i * PACK_SIZE + j] += d;
+        output[i * PACK_SIZE + j] = add(output[i * PACK_SIZE + j], d);
       } else {
         output[i * PACK_SIZE + j] = d;
       }
