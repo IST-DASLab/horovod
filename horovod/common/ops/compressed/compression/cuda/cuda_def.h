@@ -32,7 +32,9 @@ struct xorshift128p_state {
 
 const float EPS = 1e-10;
 const int PACK_SIZE = 8;
-const int MAX_THREADS_PER_BLOCK = 32;
+const int MAX_THREADS_PER_BLOCK = 1024;
+const int THREADS_PER_BLOCK_DECOMPRESS = MAX_THREADS_PER_BLOCK;
+const int THREADS_PER_BLOCK_COMPRESS = 128;
 const int MAX_NUMBER_OF_BLOCKS = 65535;
 const int WARP_SIZE = 32;
 
@@ -43,6 +45,17 @@ constexpr int BLOCKS_PER_GRID(int num_elems) {
   return MIN((num_elems + (MAX_THREADS_PER_BLOCK - 1)) / MAX_THREADS_PER_BLOCK,
              MAX_NUMBER_OF_BLOCKS);
 }
+
+typedef union {
+  float4 vec;
+  float a[4];
+} F4;
+
+typedef union {
+  uchar4 vec;
+  unsigned char a[4];
+} U4;
+
 
 } // namespace cuda
 } // namespace common

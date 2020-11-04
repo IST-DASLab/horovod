@@ -154,7 +154,15 @@ __device__ inline bool lt(__half a, __half b) {
   return __hlt(a, b);
 }
 
+template <typename T>
+__device__ inline T float2type(float a) {
+  return (T) a;
+}
 
+template <>
+__device__ inline __half float2type(float a) {
+  return __float2half(a);
+}
 
 __global__ void float2half(float* input, __half* output, int numel) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
