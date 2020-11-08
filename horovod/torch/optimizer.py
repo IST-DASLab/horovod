@@ -114,7 +114,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
     def _allreduce_grad_async(self, p):
         name = self._parameter_names.get(p)
         tensor = p.grad
-        tensor_compressed, ctx = self._compression.compress(tensor, 0)
+        tensor_compressed, ctx = self._compression.compress(p, 0)
 
         if self.op == Average:
            # Split average operation across pre/postscale factors
