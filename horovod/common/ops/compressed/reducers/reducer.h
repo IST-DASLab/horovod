@@ -7,7 +7,7 @@
 #include "../compression/error_feedback.h"
 #include "../compression/vector_operations.h"
 #include "common.h"
-#include "shm_utils.h"
+#include "comm.h"
 
 namespace horovod {
 namespace common {
@@ -107,11 +107,11 @@ public:
                                    std::vector<TensorTableEntry>& entries,
                                    int64_t global_offset) = 0;
   virtual ~SHMReducer() {
-    shm_comm_.reset();
+    hcomm_.reset();
   }
 
 protected:
-  std::shared_ptr<shmComm> shm_comm_;
+  std::shared_ptr<Comm> hcomm_;
 };
 void printDebug(float* bf, int num_elems, int device, std::string prefix);
 

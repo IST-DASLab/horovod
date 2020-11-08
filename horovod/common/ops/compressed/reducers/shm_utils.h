@@ -1,27 +1,28 @@
 #ifndef HOROVOD_SHM_UTILS_H
 #define HOROVOD_SHM_UTILS_H
-#include <mpi.h>
-#include <cuda_runtime_api.h>
+#include "comm.h"
 #include <cuda_runtime.h>
-#include <vector>
+#include <cuda_runtime_api.h>
 #include <unordered_map>
+#include <vector>
 
 namespace horovod {
-namespace common{
+namespace common {
 
-struct shmComm {
+struct shmComm : public Comm {
   shmComm(int rank);
   ~shmComm();
 
   void Init(MPI_Comm mpiComm, const std::vector<int>& ranks, size_t buf_size);
 
-  // Execute a transfer to the remote buffer.
-  // Buf: source buffer.
-  // buf_size: size in bytes to send.
-  // shm_offset: offset in shared memory to avoid race conditions on the same piece of shared memory
-  // peer_rank: rank in initial MPI_Comm.
-  void memcpy(void* buf, size_t buf_size, size_t shm_offset,
-                      int peer_rank, cudaStream_t stream);
+  virtual void Send(void* buf, size_t buf_size, int peer_rank, cudaStream_t stream,
+              size_t offset = 0);
+
+  virtual int RecvBufAsync(void** buf, int peer_rank, cudaStream_t stream,
+                           size_t offset = 0);
+  // blocking Recv
+  virtual void RecvBuf(void** buf, int peer_rank,
+               cudaStream_t stream, size_t offset);
 
   // Manual communication with the remote buffer.
   // The pattern of usage is following
@@ -32,22 +33,13 @@ struct shmComm {
   // Post data transfer.
   void post_sendBuf(int peer_rank, cudaStream_t stream);
 
-  // Get pointer to the shared memory with notification from sender.
-  // non blocking Recv.
-  // returns 0 if buffer is ready, 1 otherwise
-  int recvBufAsync(void** buf, size_t shm_offset, int peer_rank,
-      cudaStream_t stream);
-
-  // blocking Recv
-  void recvBuf(void** buf, size_t shm_offset, int peer_rank,
-               cudaStream_t stream);
-
-  void waitSendAll();
+  virtual void WaitSendAll();
 private:
   struct cudaEventSync {
     cudaEvent_t event;
     cudaIpcEventHandle_t eventHandle;
     MPI_Request request;
+    unsigned char dummy;
   };
 
   struct shmBuffer {
@@ -59,26 +51,19 @@ private:
   // Initialize send and receive resources.
   // Calls to sendInit and recvInit
   // must be separated with MPI_Barrier.
-  void sendInit(shmBuffer* resource, int peer_rank,
-      size_t shm_size);
-  void recvInit(shmBuffer* resource, int peer_rank,
-                size_t shm_size);
+  void sendInit(shmBuffer* resource, int peer_rank, size_t shm_size);
+  void recvInit(shmBuffer* resource, int peer_rank, size_t shm_size);
   // Initialize cudaIPC primitives.
   void initEventSend(cudaEventSync* eventSync, int recv_rank,
                      MPI_Request* request);
   void initEventRecv(cudaEventSync* eventSync, int send_rank);
-
 
   static void freeBuffer(shmBuffer* buffer);
   static void freeEventSync(cudaEventSync* eventSend);
 
   std::unordered_map<int, std::pair<shmBuffer, cudaEventSync>> send_resources;
   std::unordered_map<int, std::pair<shmBuffer, cudaEventSync>> recv_resources;
-  int rank_;
-  MPI_Comm comm_;
 };
-
-
 
 } // namespace common
 } // namespace horovod

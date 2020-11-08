@@ -44,6 +44,7 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
                                       compressor, summator);
     break;
   case ReductionType::SHM_ScatterAllgather:
+  case ReductionType::P2P_ScatterAllgather:
     if (global_state->controller->GetSize() !=
            global_state->controller->GetLocalSize()) {
       throw std::logic_error("SHM_Allreduce_ScatterReduceAllgather is not available in multi-node setting.");

@@ -143,6 +143,7 @@ if ("$ENV{HOROVOD_GRAD_COMPRESSION}" STREQUAL "1")
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_ring.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/mpi_ps.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/shm_scatter_allgather.cc"
+            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/p2p_comm.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/shm_utils.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/compressor.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/common.cc"

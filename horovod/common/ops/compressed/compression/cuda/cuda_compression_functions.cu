@@ -183,7 +183,7 @@ __global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
   for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;
        i += stride) {
     uint64_t value = 0;
-    if (std::is_same<T, float>::value) {
+    if (std::is_same<T, int>::value) {
       U4 input4;
       input4.vec = reinterpret_cast<uchar4*>(input + i * bits)[0];
       for (int j = 0; j < bits && i * bits + j < num_char; j++) {
@@ -302,13 +302,6 @@ __device__ void find_meta_parallel(T* input, unsigned char* meta, int num_elems,
   __syncthreads();
 }
 
-template <int B>
-class INT2UCHAR {
-  typedef std::conditional<B == 4, uchar4,
-          std::conditional<B == 3, uchar3,
-          std::conditional<B==2, uchar2, unsigned char>::type>::type>::type type;
-};
-
 template <typename T, CompressFunc FUNC, bool EF, int BITS>
 __device__ void CompressBucket(T* input, unsigned char* output,
                                T* feedback_data, unsigned char* meta_info,
@@ -326,7 +319,7 @@ __device__ void CompressBucket(T* input, unsigned char* output,
   for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;
        i += num_threads) {
     uint64_t value = 0;
-    if (std::is_same<T, float>::value) {
+    if (std::is_same<T, int>::value) {
       for (unsigned int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems;
            j += 4) {
         int idx = i * PACK_SIZE + j;
@@ -341,7 +334,7 @@ __device__ void CompressBucket(T* input, unsigned char* output,
           value += (encoded << ((j + k) * BITS));
         }
       }
-      if (unlikely(num_char - i * BITS < BITS)) {
+      if (num_char - i * BITS < BITS) {
         for (unsigned int j = 0; j < num_char - i * BITS; j++) {
           output[i * BITS + j] = value >> (PACK_SIZE * j) & 0xFF;
         }
