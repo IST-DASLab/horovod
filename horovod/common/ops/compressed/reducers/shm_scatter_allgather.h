@@ -11,7 +11,8 @@ public:
                                        GPUContext* gpu_context,
                                        HorovodGlobalState* global_state,
                                        Compressor* compressor,
-                                       Summator* summator);
+                                       Summator* summator,
+                                       CommunicatorType comm_type);
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
                            int64_t global_offset) override;

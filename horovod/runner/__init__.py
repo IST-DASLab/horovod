@@ -89,6 +89,7 @@ class _HorovodArgs(object):
         # compression arguments
         self.quantization_bits = None
         self.compression_bucket_size = 512
+        self.communicator_type = 'none'
         self.reduction_type = 'none'
         self.compression_type = 'none'
         self.compression_error_feedback = False

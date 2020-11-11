@@ -6,6 +6,8 @@
 #include "reducers/mpi_ps.h"
 #include "reducers/mpi_ring.h"
 #include "reducers/mpi_scatter_allgather.h"
+#include "reducers/shm_ring.h"
+#include "reducers/shm_tree.h"
 #include "reducers/shm_scatter_allgather.h"
 #include "utils.h"
 
@@ -23,38 +25,64 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
     : MPI_GPUAllreduce(mpi_context, gpu_context, global_state) {
   auto reduction_type = GetEnumEnvOrDefault<ReductionType>(
       HOROVOD_REDUCTION, ReductionType::NoneReduction);
+  auto communicator_type = GetEnumEnvOrDefault<CommunicatorType>(
+      HOROVOD_COMMUNICATOR, CommunicatorType::NoneCommunicator);
+  if (communicator_type != CommunicatorType::MPI &&
+      communicator_type != CommunicatorType::P2P &&
+      communicator_type != CommunicatorType::SHM) {
+    mpiReducer = nullptr;
+    return;
+  }
   Compressor* compressor = CreateGPUCompressor(gpu_context, global_state);
   global_compressor = compressor;
   auto summator = new GPUSummator(global_state, gpu_context);
-  switch (reduction_type) {
-  case ReductionType::AllGather:
-    mpiReducer = new MPI_Allreduce_AllGather(
-        mpi_context, gpu_context, global_state, compressor, summator);
-    break;
-  case ReductionType::Ring:
-    mpiReducer = new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state,
+  if (communicator_type == CommunicatorType::MPI) {
+    switch (reduction_type) {
+    case ReductionType::AllGather:
+      mpiReducer = new MPI_Allreduce_AllGather(
+          mpi_context, gpu_context, global_state, compressor, summator);
+      break;
+    case ReductionType::Ring:
+      mpiReducer = new MPI_Allreduce_Ring(mpi_context, gpu_context,
+                                          global_state, compressor, summator);
+      break;
+    case ReductionType::ScatterAllgather:
+      mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
+          mpi_context, gpu_context, global_state, compressor, summator);
+      break;
+    case ReductionType::PS:
+      mpiReducer = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
                                         compressor, summator);
-    break;
-  case ReductionType::ScatterAllgather:
-    mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
-        mpi_context, gpu_context, global_state, compressor, summator);
-    break;
-  case ReductionType::PS:
-    mpiReducer = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
-                                      compressor, summator);
-    break;
-  case ReductionType::SHM_ScatterAllgather:
-  case ReductionType::P2P_ScatterAllgather:
-    if (global_state->controller->GetSize() !=
-           global_state->controller->GetLocalSize()) {
-      throw std::logic_error("SHM_Allreduce_ScatterReduceAllgather is not available in multi-node setting.");
+      break;
+    default:
+      mpiReducer = nullptr;
+      break;
     }
-    mpiReducer = new SHM_Allreduce_ScatterReduceAllgather(
-        mpi_context, gpu_context, global_state, compressor, summator);
-    break;
-  default:
-    mpiReducer = nullptr;
-    break;
+  } else {
+    if (global_state->controller->GetSize() !=
+        global_state->controller->GetLocalSize()) {
+      throw std::logic_error("SHM_Allreduce_ScatterReduceAllgather is not "
+                             "available in multi-node setting.");
+    }
+    switch (reduction_type) {
+    case ReductionType::ScatterAllgather:
+      mpiReducer = new SHM_Allreduce_ScatterReduceAllgather(
+          mpi_context, gpu_context, global_state, compressor, summator,
+          communicator_type);
+      break;
+    case ReductionType::Ring:
+      mpiReducer =
+          new SHM_Allreduce_Ring(mpi_context, gpu_context, global_state,
+                                 compressor, summator, communicator_type);
+      break;
+    case ReductionType::Tree:
+      mpiReducer = new SHM_Allreduce_Tree(mpi_context, gpu_context, global_state,
+                                          compressor, summator, communicator_type);
+      break;
+    default:
+      mpiReducer = nullptr;
+      break;
+    }
   }
 }
 

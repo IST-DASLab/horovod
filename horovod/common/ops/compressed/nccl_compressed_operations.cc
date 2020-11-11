@@ -12,46 +12,53 @@ namespace common {
 NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
     NCCLContext* nccl_context, GPUContext* gpu_context,
     HorovodGlobalState* global_state,
-    horovod::common::Communicator communicator_type)
-    : NCCLAllreduce(nccl_context, gpu_context, global_state,
-                    communicator_type) {
+    horovod::common::Communicator mpi_communicator)
+    : NCCLAllreduce(nccl_context, gpu_context, global_state, mpi_communicator) {
   Compressor* compressor = CreateGPUCompressor(gpu_context, global_state);
   auto summator = new GPUSummator(global_state, gpu_context);
   reduction_type_ = GetEnumEnvOrDefault<ReductionType>(
       HOROVOD_REDUCTION, ReductionType::NoneReduction);
+  auto communicator_type = GetEnumEnvOrDefault<CommunicatorType>(
+      HOROVOD_COMMUNICATOR, CommunicatorType::NoneCommunicator);
+  if (communicator_type != CommunicatorType::NCCL) {
+    reducer = nullptr;
+    return;
+  }
+
   switch (reduction_type_) {
-  case ReductionType::NCCL_Allgather:
+  case ReductionType::AllGather:
     reducer = new NCCL_Allreduce_AllGather(nccl_context, gpu_context,
                                            &gpu_op_context_, global_state,
                                            compressor, summator);
     break;
-  case ReductionType::NCCL_ScatterAllgather:
+  case ReductionType::ScatterAllgather:
 #ifdef NCCL_P2P_SUPPORTED
     reducer = new NCCL_Allreduce_ScatterAllgather(
         nccl_context, gpu_context, &gpu_op_context_, global_state, compressor,
         summator);
     break;
 #else
-    throw std::logic_error("NCCL_ScatterAllgather is not supported because of older NCCL Version.");
+    throw std::logic_error("NCCL_ScatterAllgather is not supported because of "
+                           "older NCCL Version.");
 #endif
-  case ReductionType::NCCL_Ring:
+  case ReductionType::Ring:
 #ifdef NCCL_P2P_SUPPORTED
     reducer =
         new NCCL_Allreduce_Ring(nccl_context, gpu_context, &gpu_op_context_,
                                 global_state, compressor, summator);
     break;
 #else
-    throw std::logic_error("NCCL_Ring is not supported because of older NCCL Version.: " + std::to_string(NCCL_VERSION_CODE));
+    throw std::logic_error(
+        "NCCL_Ring is not supported because of older NCCL Version.: " +
+        std::to_string(NCCL_VERSION_CODE));
 #endif
-    default:
+  default:
     reducer = nullptr;
     break;
   }
 }
 
-NCCL_CompressedAllreduce::~NCCL_CompressedAllreduce() {
-  delete reducer;
-}
+NCCL_CompressedAllreduce::~NCCL_CompressedAllreduce() { delete reducer; }
 
 Status NCCL_CompressedAllreduce::Allreduce(
     int num_elements, std::vector<horovod::common::TensorTableEntry>& entries,
@@ -74,14 +81,16 @@ Status NCCL_CompressedAllreduce::Allreduce(
            buffer_len % tensor_fusion_threshold != 0)
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
-      status = reducer->AllreduceDivision(num_elements_division, nccl_op_context_.nccl_comm_, entries,
+      status = reducer->AllreduceDivision(num_elements_division,
+                                          nccl_op_context_.nccl_comm_, entries,
                                           global_offset);
       if (!status.ok())
         return status;
       global_offset += (tensor_fusion_threshold / sizeof(float));
     }
   } else {
-    status = reducer->AllreduceDivision(num_elements, nccl_op_context_.nccl_comm_, entries, 0l);
+    status = reducer->AllreduceDivision(
+        num_elements, nccl_op_context_.nccl_comm_, entries, 0l);
   }
   return status;
 }
@@ -120,7 +129,9 @@ bool NCCL_CompressedAllreduce::Enabled(
     const std::vector<TensorTableEntry>& entries,
     const Response& response) const {
   if (reducer == nullptr ||
-      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) * sizeof(float) < BUFFER_THRESHOLD ||
+      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *
+              sizeof(float) <
+          BUFFER_THRESHOLD ||
       !EnabledName(entries[0].tensor_name) ||
       !(entries[0].tensor->dtype() == HOROVOD_FLOAT32 ||
         entries[0].tensor->dtype() == HOROVOD_FLOAT16) ||

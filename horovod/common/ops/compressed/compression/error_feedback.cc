@@ -7,11 +7,13 @@
 namespace horovod {
 namespace common {
 
-ErrorFeedback::ErrorFeedback(Summator* summator, bool do_print)
-    : summator_(summator), do_print_(do_print) {
+ErrorFeedback::ErrorFeedback(Summator* summator)
+    : summator_(summator) {
   SetBoolFromEnv(HOROVOD_COMPRESSION_ERROR_FEEDBACK, enabled_, true);
 }
-
+ErrorFeedback::~ErrorFeedback() {
+    delete summator_;
+}
 Status ErrorFeedback::Init(const std::vector<TensorTableEntry>& entries) {
   if (!enabled_)
     return Status::OK();

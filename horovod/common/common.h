@@ -92,6 +92,7 @@ namespace common {
 #define HOROVOD_GLOO "GLOO"
 #define HOROVOD_ADASUM_MPI_CHUNK_SIZE "HOROVOD_ADASUM_MPI_CHUNK_SIZE"
 #define HOROVOD_THREAD_AFFINITY "HOROVOD_THREAD_AFFINITY"
+#define HOROVOD_COMMUNICATOR "HOROVOD_COMMUNICATOR"
 #define HOROVOD_REDUCTION "HOROVOD_REDUCTION"
 #define HOROVOD_COMPRESSION "HOROVOD_COMPRESSION"
 #define HOROVOD_COMPRESSION_NORM_TYPE "HOROVOD_COMPRESSION_NORM_TYPE"
@@ -129,16 +130,20 @@ enum Communicator {
   CROSS = 2
 };
 
+enum CommunicatorType {
+  MPI,
+  NCCL,
+  SHM,
+  P2P,
+  NoneCommunicator
+};
+
 enum ReductionType {
   AllGather,
   ScatterAllgather,
   Ring,
   PS,
-  NCCL_Allgather,
-  NCCL_ScatterAllgather,
-  NCCL_Ring,
-  SHM_ScatterAllgather,
-  P2P_ScatterAllgather,
+  Tree,
   NoneReduction
 };
 

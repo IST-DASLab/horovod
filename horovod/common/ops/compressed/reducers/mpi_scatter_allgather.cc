@@ -223,7 +223,7 @@ void printDebug(float* bf, int num_elems, int device, std::string prefix) {
     host_buf = bf;
   } else {
     host_buf = new float[num_elems];
-    cudaMemcpy(host_buf, bf, num_elems * sizeof(float), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(host_buf, bf, num_elems * sizeof(float), cudaMemcpyDeviceToHost));
   }
   for (int i = 0; i < num_elems; i++) {
     ss << host_buf[i] << " ";

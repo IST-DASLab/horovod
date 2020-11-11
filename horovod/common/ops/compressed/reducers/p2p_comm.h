@@ -10,12 +10,14 @@ namespace common {
 struct p2pComm : public Comm {
   p2pComm(int rank) : Comm(rank) {}
   // mpiComm: communicator within which we perform reduction.
-  // ranks: ranks within the communicator. All ranks must map to GPU devices.
+  // send_ranks: ranks within the communicator used for sending. All ranks must map to GPU devices.
+  // recv_ranks: ranks within the communicator used for receiving. All ranks must map to GPU devices.
   // recv_buf: buffer used for receiving in communication.
   // buf_size: buffer size taken from recv_buf for each rank.
   // Assumed that recv_bufs points to buffer with size
   // allocated buf_size * ranks.size() bytes.
-  void Init(MPI_Comm mpiComm, const std::vector<int>& ranks,
+  void Init(MPI_Comm mpiComm, const std::vector<int>& send_ranks,
+            const std::vector<int>& recv_ranks,
             unsigned char* recv_bufs, size_t buf_size);
 
   virtual void Send(void* buf, size_t buf_size, int peer_rank,

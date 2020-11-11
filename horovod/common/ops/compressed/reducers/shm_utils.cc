@@ -99,32 +99,33 @@ static int shmClose(void* shmPtr, void* devShmPtr, const int shmsize) {
  */
 shmComm::shmComm(int rank) : Comm(rank) {}
 
-void shmComm::Init(MPI_Comm mpiComm, const std::vector<int>& ranks,
+void shmComm::Init(MPI_Comm mpiComm, const std::vector<int>& send_ranks,
+                   const std::vector<int>& recv_ranks,
                    size_t buf_size) {
   comm_ = mpiComm;
   // Initialize shared memory buffers.
-  for (auto peer_rank : ranks) {
+  for (auto peer_rank : send_ranks) {
     auto& send_resource = send_resources[peer_rank];
     sendInit(&send_resource.first, peer_rank, buf_size);
   }
   MPI_Barrier(comm_);
-  for (auto peer_rank : ranks) {
+  for (auto peer_rank : recv_ranks) {
     auto& recv_resource = recv_resources[peer_rank];
     recvInit(&recv_resource.first, peer_rank, buf_size);
   }
 
   // Initialize IPC primitives.
-  MPI_Request* send_requests = new MPI_Request[ranks.size()];
+  MPI_Request* send_requests = new MPI_Request[send_ranks.size()];
   int count = 0;
-  for (auto peer_rank : ranks) {
+  for (auto peer_rank : send_ranks) {
     auto& send_resource = send_resources[peer_rank];
     initEventSend(&send_resource.second, peer_rank, &send_requests[count++]);
   }
-  for (auto peer_rank : ranks) {
+  for (auto peer_rank : recv_ranks) {
     auto& recv_resource = recv_resources[peer_rank];
     initEventRecv(&recv_resource.second, peer_rank);
   }
-  MPI_Waitall(ranks.size(), send_requests, MPI_STATUSES_IGNORE);
+  MPI_Waitall(send_ranks.size(), send_requests, MPI_STATUSES_IGNORE);
   delete[] send_requests;
 }
 

@@ -310,7 +310,6 @@ __device__ void CompressBucket(T* input, unsigned char* output,
   unsigned int tid = threadIdx.x;
   unsigned int num_threads = blockDim.x;
   float rand;
-  extern __shared__ uint64_t compute_data[];
   int num_char = (BITS * num_elems + PACK_SIZE - 1) / PACK_SIZE;
   T* feedback_ = nullptr;
   F4 input4;

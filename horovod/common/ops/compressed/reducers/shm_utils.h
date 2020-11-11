@@ -13,7 +13,8 @@ struct shmComm : public Comm {
   shmComm(int rank);
   ~shmComm();
 
-  void Init(MPI_Comm mpiComm, const std::vector<int>& ranks, size_t buf_size);
+  void Init(MPI_Comm mpiComm, const std::vector<int>& send_ranks,
+            const std::vector<int>& recv_ranks, size_t buf_size);
 
   virtual void Send(void* buf, size_t buf_size, int peer_rank, cudaStream_t stream,
               size_t offset = 0);

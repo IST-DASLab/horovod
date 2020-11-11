@@ -466,6 +466,11 @@ def parse_args():
                                        'was built with MPI support.')
 
     group_grad_compression = parser.add_argument_group('compression arguments')
+    group_grad_compression.add_argument('--communicator-type', type=config_parser.CommunicatorType.from_string,
+                                        choices=list(config_parser.CommunicatorType),
+                                        action=make_override_action(override_args),
+                                        help='Type of communicator to use in allreduce in '
+                                             'case of compressed communication.')
     group_grad_compression.add_argument('--reduction-type', type=config_parser.ReductionType.from_string,
                                         choices=list(config_parser.ReductionType),
                                         action=make_override_action(override_args),

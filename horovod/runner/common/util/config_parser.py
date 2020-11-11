@@ -55,6 +55,7 @@ LOG_LEVELS = ['TRACE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'FATAL']
 # Compression knobs
 HOROVOD_QUANTIZATION_BITS = "HOROVOD_QUANTIZATION_BITS"
 HOROVOD_COMPRESSION_BUCKET_SIZE = "HOROVOD_COMPRESSION_BUCKET_SIZE"
+HOROVOD_COMMUNICATOR = "HOROVOD_COMMUNICATOR"
 HOROVOD_REDUCTION = "HOROVOD_REDUCTION"
 HOROVOD_COMPRESSION = "HOROVOD_COMPRESSION"
 HOROVOD_COMPRESSION_NORM_TYPE = "HOROVOD_COMPRESSION_NORM_TYPE"
@@ -62,18 +63,31 @@ HOROVOD_NCCL_FAKE_COMPRESSION = "HOROVOD_NCCL_FAKE_COMPRESSION"
 HOROVOD_COMPRESSION_LEVELS_TYPE = "HOROVOD_COMPRESSION_LEVELS_TYPE"
 HOROVOD_COMPRESSION_ERROR_FEEDBACK = "HOROVOD_COMPRESSION_ERROR_FEEDBACK"
 
+class CommunicatorType(Enum):
+    MPI = 0
+    NCCL = 1
+    SHM = 2
+    P2P = 3
+    none = 4
+
+    def __str__(self):
+        return self.name
+
+    @staticmethod
+    def from_string(s):
+        try:
+            return CommunicatorType[s]
+        except KeyError:
+            raise ValueError("Wrong Communicator type")
+
 
 class ReductionType(Enum):
-    MPI_AllGather = 0
-    MPI_SRA = 1
-    MPI_Ring = 2
-    MPI_PS = 3
-    NCCL_AllGather = 4
-    NCCL_SRA = 5
-    NCCL_Ring = 6
-    SHM_SRA = 7
-    P2P_SRA = 8
-    none = 9
+    AllGather = 0
+    SRA = 1
+    Ring = 2
+    PS = 3
+    Tree = 4
+    none = 5
 
     def __str__(self):
         return self.name
@@ -296,6 +310,7 @@ def set_env_from_args(env, args):
 
     _add_arg_to_env(env, HOROVOD_QUANTIZATION_BITS, args.compression_quantization_bits if args.compression_quantization_bits and args.compression_quantization_bits > 0 else None)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_BUCKET_SIZE, args.compression_bucket_size)
+    _add_arg_to_env(env, HOROVOD_COMMUNICATOR, args.communicator_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_REDUCTION, args.reduction_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_COMPRESSION, args.compression_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_LEVELS_TYPE, args.compression_levels_type, enum_tf)

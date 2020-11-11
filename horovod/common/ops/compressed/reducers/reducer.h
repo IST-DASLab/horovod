@@ -17,15 +17,13 @@ public:
   Reducer(HorovodGlobalState* global_state, Compressor* compressor,
           Summator* summator)
       : global_state_(global_state), compressor_(compressor),
-        summator_(summator),
-        error_feedback_(summator, global_state->controller->GetRank() == 0) {
+        error_feedback_(summator) {
     tensor_fusion_threshold_ =
         global_state->parameter_manager.TensorFusionThresholdBytes();
   }
 
   virtual ~Reducer() {
     delete compressor_;
-    delete summator_;
   }
 
   void ApplyErrorFeedback(std::vector<TensorTableEntry>& entries) {
@@ -36,7 +34,6 @@ protected:
   HorovodGlobalState* global_state_;
 
   Compressor* compressor_;
-  Summator* summator_;
   ErrorFeedback error_feedback_;
 
   // We only need some framework agnostic Buffer Manager so we reuse
@@ -99,9 +96,9 @@ class SHMReducer : public MPIReducer {
 public:
   SHMReducer(MPIContext* mpi_context, GPUContext* gpu_context,
              HorovodGlobalState* global_state, Compressor* compressor,
-             Summator* summator)
+             Summator* summator, CommunicatorType comm_type)
       : MPIReducer(mpi_context, gpu_context, global_state, compressor,
-                   summator){};
+                   summator), comm_type_(comm_type) {};
 
   virtual Status AllreduceDivision(int num_elements,
                                    std::vector<TensorTableEntry>& entries,
@@ -112,6 +109,7 @@ public:
 
 protected:
   std::shared_ptr<Comm> hcomm_;
+  CommunicatorType comm_type_;
 };
 void printDebug(float* bf, int num_elems, int device, std::string prefix);
 

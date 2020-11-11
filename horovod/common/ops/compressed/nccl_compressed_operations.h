@@ -14,7 +14,7 @@ public:
   NCCL_CompressedAllreduce(
       NCCLContext* nccl_context, GPUContext* gpu_context,
       HorovodGlobalState* global_state,
-      horovod::common::Communicator communicator_type = Communicator::GLOBAL);
+      horovod::common::Communicator mpi_communicator = Communicator::GLOBAL);
 
   ~NCCL_CompressedAllreduce() override;
   Status Execute(std::vector<TensorTableEntry>& entries,
