@@ -26,8 +26,7 @@ MaxMinEncodeValue(T input, T* feedback, unsigned char* meta_info, T rand) {
 template <typename T>
 inline __device__ T MaxMinDecodeValue(unsigned char input,
                                       unsigned char* meta_info,
-                                      unsigned int idx, int bucket_size,
-                                      int bits) {
+                                      unsigned int idx, int bucket_size) {
   int bucket_no = idx / bucket_size;
   T* maxmin = ((T*)meta_info) + 2 * bucket_no;
   T min = maxmin[1];
@@ -69,20 +68,20 @@ inline __device__ unsigned char NormPosEncodeValue(T input, T* feedback,
   return level_idx;
 }
 
-template <typename T, bool ONE_BIT>
+template <typename T, int BITS>
 inline __device__ T NormPosDecodeValue(unsigned char input,
                                        unsigned char* meta_info,
                                        unsigned int idx, int bucket_size,
-                                       int bits, void* ctx) {
+                                       void* ctx) {
   int bucket_no = idx / bucket_size;
   T norm = ((T*)meta_info)[bucket_no];
   T* levels = (T*)ctx;
-  int num_levels = 1 << (bits - 1);
+  const int num_levels = 1 << (BITS - 1);
   char sign = (input & num_levels) ? -1 : 1;
   input &= (num_levels - 1);
   T decode_value = mul_int(norm, (int)sign);
 
-  if (!ONE_BIT) {
+  if (BITS > 1) {
     decode_value = mul(decode_value, levels[input]);
   }
   return decode_value;
@@ -119,16 +118,16 @@ inline __device__ unsigned char NormWideEncodeValue(T input, T* feedback,
   return level_idx;
 }
 
-template <typename T, bool ONE_BIT>
+template <typename T, int BITS>
 inline __device__ T NormWideDecodeValue(unsigned char input,
                                         unsigned char* meta_info,
                                         unsigned int idx, int bucket_size,
-                                        int bits, void* ctx) {
+                                        void* ctx) {
   int bucket_no = idx / bucket_size;
   T norm = ((T*)meta_info)[bucket_no];
   T* levels = (T*)ctx;
   T decode_value = norm;
-  if (!ONE_BIT) {
+  if (BITS > 1) {
     decode_value = mul(decode_value, levels[input]);
   }
   return decode_value;
@@ -153,82 +152,23 @@ EncodeValue(T input, T* feedback, unsigned char* meta_info, T rand, void* ctx) {
   }
 }
 
-template <typename T, CompressFunc method, bool ONE_BIT>
+template <typename T, CompressFunc method, int BITS>
 inline __device__ T DecodeValue(unsigned char input, unsigned char* meta_info,
-                                unsigned int idx, int bucket_size, int bits,
+                                unsigned int idx, int bucket_size,
                                 void* ctx) {
   switch (method) {
   case CompressFunc::MaxMin:
-    return MaxMinDecodeValue<T>(input, meta_info, idx, bucket_size, bits);
+    return MaxMinDecodeValue<T>(input, meta_info, idx, bucket_size);
   case CompressFunc::NormWide:
-    return NormWideDecodeValue<T, ONE_BIT>(input, meta_info, idx, bucket_size,
-                                           bits, ctx);
+    return NormWideDecodeValue<T, BITS>(input, meta_info, idx, bucket_size,
+                                           ctx);
   case CompressFunc::NormPos:
-    return NormPosDecodeValue<T, ONE_BIT>(input, meta_info, idx, bucket_size,
-                                          bits, ctx);
+    return NormPosDecodeValue<T, BITS>(input, meta_info, idx, bucket_size,
+                                          ctx);
   default:
     printf("Wrong compression type\n");
     return 0;
   }
-}
-
-template <typename T, CompressFunc FUNC, bool ADD, bool ONE_BIT>
-__global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
-                            T* output, int num_elems, int bucket_size, int bits,
-                            void* ctx) {
-  unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
-  unsigned int stride = gridDim.x * blockDim.x;
-  int num_char = (bits * num_elems + PACK_SIZE - 1) / PACK_SIZE;
-  unsigned int divisor = 1 << bits;
-  for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;
-       i += stride) {
-    uint64_t value = 0;
-    if (std::is_same<T, int>::value) {
-      U4 input4;
-      input4.vec = reinterpret_cast<uchar4*>(input + i * bits)[0];
-      for (int j = 0; j < bits && i * bits + j < num_char; j++) {
-        value |= ((uint64_t)input4.a[j]) << (j * PACK_SIZE);
-      }
-      F4 output4;
-      for (int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems; j += 4) {
-#pragma unroll 4
-        for (int k = 0; k < 4; k++) {
-          unsigned char encoded_value =
-              (value >> ((j + k) * bits)) & (divisor - 1);
-          T d = DecodeValue<T, FUNC, ONE_BIT>(encoded_value, meta_info,
-                                              i * PACK_SIZE + j + k,
-                                              bucket_size, bits, ctx);
-          if (ADD) {
-            output4.a[k] = add((T)(output4.a[k]), d);
-          } else {
-            output4.a[k] = d;
-          }
-        }
-        float4* output_p = reinterpret_cast<float4*>(&output[i * PACK_SIZE]);
-        *output_p = output4.vec;
-      }
-    } else {
-      for (int j = 0; j < bits && i * bits + j < num_char; j++) {
-        value |= ((uint64_t)input[i * bits + j]) << (j * PACK_SIZE);
-      }
-      for (int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems; j++) {
-        unsigned char encoded_value = (value >> (j * bits)) & (divisor - 1);
-        T d = DecodeValue<T, FUNC, ONE_BIT>(encoded_value, meta_info,
-                                            i * PACK_SIZE + j, bucket_size,
-                                            bits, ctx);
-        if (ADD) {
-          output[i * PACK_SIZE + j] = add(output[i * PACK_SIZE + j], d);
-        } else {
-          output[i * PACK_SIZE + j] = d;
-        }
-      }
-    }
-  }
-}
-
-void CUDA_convert_to_halves(float* input, Half* output, int numel) {
-  float2half<<<numel, 1, 0, 0>>>(input, output, numel);
-  CUDA_CHECK(cudaStreamSynchronize(0));
 }
 
 template <typename T, CompressFunc FUNC, NormType NORM>
@@ -302,6 +242,41 @@ __device__ void find_meta_parallel(T* input, unsigned char* meta, int num_elems,
   __syncthreads();
 }
 
+template <int BITS>
+inline __device__ void store_output(const int64_t value, unsigned char* output) {
+  for (unsigned int j = 0; j < BITS; j++) {
+    output[j] = value >> (PACK_SIZE * j) & 0xFF;
+  }
+}
+
+template<>
+inline __device__ void store_output<4>(const int64_t value, unsigned char* output) {
+  U4 output4;
+#pragma unroll 4
+  for (unsigned int j = 0; j < 4; j++){
+    output4.a[j] = value >> (PACK_SIZE * j) & 0xFF;
+  }
+  uchar4* output_p = reinterpret_cast<uchar4*>(output);
+  output_p[0] = output4.vec;
+}
+
+template<>
+inline __device__ void store_output<8>(const int64_t value, unsigned char* output) {
+  U4 output4;
+#pragma unroll 4
+  for (unsigned int j = 0; j < 4; j++){
+    output4.a[j] = value >> (PACK_SIZE * j) & 0xFF;
+  }
+  uchar4* output_p = reinterpret_cast<uchar4*>(output);
+  output_p[0] = output4.vec;
+#pragma unroll 4
+  for (unsigned int j = 0; j < 4; j++){
+    output4.a[j] = value >> (PACK_SIZE * j) & 0xFF;
+  }
+  output_p[1] = output4.vec;
+}
+
+
 template <typename T, CompressFunc FUNC, bool EF, int BITS>
 __device__ void CompressBucket(T* input, unsigned char* output,
                                T* feedback_data, unsigned char* meta_info,
@@ -312,25 +287,35 @@ __device__ void CompressBucket(T* input, unsigned char* output,
   float rand;
   int num_char = (BITS * num_elems + PACK_SIZE - 1) / PACK_SIZE;
   T* feedback_ = nullptr;
-  F4 input4;
-  U4 output4;
-  uchar4* output_p;
   for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;
        i += num_threads) {
     uint64_t value = 0;
-    if (std::is_same<T, int>::value) {
-      for (unsigned int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems;
-           j += 4) {
-        int idx = i * PACK_SIZE + j;
-        input4.vec = (reinterpret_cast<float4*>(input + idx))[0];
+    if (std::is_same<T, float>::value) {
+      F4 input4;
+      if (num_elems - i * PACK_SIZE >= PACK_SIZE) {
+#pragma unroll (PACK_SIZE / 4)
+        for (unsigned int j = 0; j < PACK_SIZE; j += 4) {
+          int idx = i * PACK_SIZE + j;
+          input4.vec = (reinterpret_cast<float4*>(input + idx))[0];
 #pragma unroll 4
-        for (int k = 0; k < 4; k++) {
-          rand = GetRand(state);
+          for (int k = 0; k < 4; k++) {
+            rand = GetRand(state);
+            if (EF)
+              feedback_ = feedback_data + idx + k;
+            uint64_t encoded = EncodeValue<T, FUNC, EF, BITS>(
+                input4.a[k], feedback_, meta_info, float2type<T>(rand), ctx);
+            value += (encoded << ((j + k) * BITS));
+          }
+        }
+      } else {
+        for (unsigned int j = 0; j < num_elems - i * PACK_SIZE; j++) {
+          int idx = i * PACK_SIZE + j;
           if (EF)
-            feedback_ = feedback_data + idx + k;
-          uint64_t encoded = EncodeValue<T, FUNC, EF, BITS>(
-              input4.a[k], feedback_, meta_info, float2type<T>(rand), ctx);
-          value += (encoded << ((j + k) * BITS));
+            feedback_ = feedback_data + idx;
+          rand = GetRand(state);
+          unsigned encoded = EncodeValue<T, FUNC, EF, BITS>(
+              input[idx], feedback_, meta_info, rand, ctx);
+          value += (encoded << (j * BITS));
         }
       }
       if (num_char - i * BITS < BITS) {
@@ -338,28 +323,8 @@ __device__ void CompressBucket(T* input, unsigned char* output,
           output[i * BITS + j] = value >> (PACK_SIZE * j) & 0xFF;
         }
       } else {
-        int remained = BITS;
-        int PACK = 0;
-        if (BITS >= 4) {
-#pragma unroll 4
-          for (unsigned int j = 0; j < 4; j++) {
-            output4.a[j] = value >> (PACK_SIZE * j) & 0xFF;
-          }
-          output_p = reinterpret_cast<uchar4*>(&output[i * BITS]);
-          output_p[0] = output4.vec;
-          remained = BITS - 4;
-          PACK = 4;
-        }
-        if (remained > 0) {
-          for (unsigned int j = 0; j < remained; j++) {
-            output[i * BITS + PACK + j] = value >> (PACK_SIZE * j) & 0xFF;
-          }
-        }
+        store_output<BITS>(value, output + i * BITS);
       }
-      //      for (unsigned int j = 0; j < bits && i * bits + j < num_char; j++)
-      //      {
-      //        output[i * bits + j] = value >> (PACK_SIZE * j) & 0xFF;
-      //      }
     } else {
       for (unsigned int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems;
            j++) {
@@ -389,8 +354,8 @@ __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
   unsigned int cur_bucket_size;
   T* meta = (T*)output_data;
   unsigned char* output;
-  const int meta_multiplier = (FUNC == CompressFunc::MaxMin) ? 2 : 1;
-  output = output_data + meta_multiplier * sizeof(T) * num_buckets;
+  const int META_MULTIPLIER = (FUNC == CompressFunc::MaxMin) ? 2 : 1;
+  output = output_data + META_MULTIPLIER * sizeof(T) * num_buckets;
 
   unsigned int compressed_size =
       (bucket_size * BITS + PACK_SIZE - 1) / PACK_SIZE;
@@ -400,7 +365,7 @@ __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
     cur_bucket_size = umin(bucket_size, num_elems - bucket_id * bucket_size);
     find_meta_parallel<T, FUNC, NORM>(
         input + bucket_size * bucket_id,
-        (unsigned char*)(meta + meta_multiplier * bucket_id), cur_bucket_size,
+        (unsigned char*)(meta + META_MULTIPLIER * bucket_id), cur_bucket_size,
         BITS);
   }
   CurandState local_state = states[tid];
@@ -408,10 +373,116 @@ __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
     cur_bucket_size = umin(bucket_size, num_elems - bucket_id * bucket_size);
     CompressBucket<T, FUNC, EF, BITS>(
         input + bucket_size * bucket_id, output + compressed_size * bucket_id,
-        (T*)feedback_data, (unsigned char*)(meta + meta_multiplier * bucket_id),
+        (T*)feedback_data, (unsigned char*)(meta + META_MULTIPLIER * bucket_id),
         cur_bucket_size, &local_state, ctx);
   }
   states[tid] = local_state;
+}
+
+
+template <int BITS>
+inline __device__ void unpack_value(unsigned char* input, uint64_t& value) {
+  for (unsigned int j = 0; j < BITS; j++) {
+    value |= ((uint64_t)input[j]) << (j * PACK_SIZE);
+  }
+}
+
+template <>
+inline __device__ void unpack_value<4>(unsigned char* input, uint64_t& value) {
+  U4 input4;
+  input4.vec = reinterpret_cast<uchar4*>(input)[0];
+  for (unsigned int j = 0; j < 4; j++) {
+    value |= ((uint64_t)input4.a[j]) << (j * PACK_SIZE);
+  }
+}
+
+template <>
+inline __device__ void unpack_value<8>(unsigned char* input, uint64_t& value) {
+  U4 input4;
+  input4.vec = reinterpret_cast<uchar4*>(input)[0];
+  for (unsigned int j = 0; j < 4; j++) {
+    value |= ((uint64_t)input4.a[j]) << (j * PACK_SIZE);
+  }
+  input4.vec = reinterpret_cast<uchar4*>(input)[1];
+  for (unsigned int j = 0; j < 4; j++) {
+    value |= ((uint64_t)input4.a[j]) << (j * PACK_SIZE);
+  }
+}
+
+template <typename T, CompressFunc FUNC, bool ADD, int BITS>
+__global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
+                            T* output, int num_elems, int bucket_size,
+                            void* ctx) {
+  unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  unsigned int stride = gridDim.x * blockDim.x;
+  int num_char = (BITS * num_elems + PACK_SIZE - 1) / PACK_SIZE;
+  const unsigned int divisor = 1 << BITS;
+  for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;
+       i += stride) {
+    uint64_t value = 0;
+    if (std::is_same<T, float>::value) {
+      if ((i + 1) * BITS > num_char) {
+        for (unsigned int j = 0; j < num_char - i * BITS; j++)
+          value |= ((uint64_t)input[i * BITS + j]) << (j * PACK_SIZE);
+      } else {
+        unpack_value<BITS>(input + i * BITS, value);
+      }
+
+      if ((i + 1) * PACK_SIZE > num_elems) {
+        for (unsigned int j = 0; j < num_elems - i * PACK_SIZE; j++) {
+          unsigned char encoded_value = (value >> (j * BITS)) & (divisor - 1);
+          T d = DecodeValue<T, FUNC, BITS>(encoded_value, meta_info,
+                                           i * PACK_SIZE + j, bucket_size,
+                                           ctx);
+          if (ADD) {
+            output[i * PACK_SIZE + j] = add(output[i * PACK_SIZE + j], d);
+          } else {
+            output[i * PACK_SIZE + j] = d;
+          }
+        }
+      } else {
+        F4 output4;
+#pragma unroll (PACK_SIZE / 4)
+        for (int j = 0; j < PACK_SIZE; j += 4) {
+#pragma unroll 4
+          for (int k = 0; k < 4; k++) {
+            unsigned char encoded_value =
+                (value >> ((j + k) * BITS)) & (divisor - 1);
+            T d = DecodeValue<T, FUNC, BITS>(encoded_value, meta_info,
+                                             i * PACK_SIZE + j + k,
+                                             bucket_size, ctx);
+            if (ADD) {
+              output4.a[k] = add((T)(output4.a[k]), d);
+            } else {
+              output4.a[k] = d;
+            }
+          }
+          float4* output_p = reinterpret_cast<float4*>(&output[i * PACK_SIZE + j]);
+          *output_p = output4.vec;
+        }
+      }
+    } else {
+      for (int j = 0; j < BITS && i * BITS + j < num_char; j++) {
+        value |= ((uint64_t)input[i * BITS + j]) << (j * PACK_SIZE);
+      }
+      for (int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems; j++) {
+        unsigned char encoded_value = (value >> (j * BITS)) & (divisor - 1);
+        T d = DecodeValue<T, FUNC, BITS>(encoded_value, meta_info,
+                                            i * PACK_SIZE + j, bucket_size,
+                                            ctx);
+        if (ADD) {
+          output[i * PACK_SIZE + j] = add(output[i * PACK_SIZE + j], d);
+        } else {
+          output[i * PACK_SIZE + j] = d;
+        }
+      }
+    }
+  }
+}
+
+void CUDA_convert_to_halves(float* input, Half* output, int numel) {
+  float2half<<<numel, 1, 0, 0>>>(input, output, numel);
+  CUDA_CHECK(cudaStreamSynchronize(0));
 }
 
 template <typename T, CompressFunc FUNC, NormType NORM, bool EF>
@@ -423,54 +494,54 @@ inline void QUANTIZE2(unsigned char* input_data, unsigned char* output_data,
   switch (bits) {
   case 1:
     quantize<T, FUNC, NORM, EF, 1>
-    <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
-        input_data, output_data, feedback_data, num_elems,
-        bucket_size, states, ctx);
+        <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
+            input_data, output_data, feedback_data, num_elems, bucket_size,
+            states, ctx);
     break;
   case 2:
     quantize<T, FUNC, NORM, EF, 2>
-    <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
-        input_data, output_data, feedback_data, num_elems,
-        bucket_size, states, ctx);
+        <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
+            input_data, output_data, feedback_data, num_elems, bucket_size,
+            states, ctx);
     break;
   case 3:
     quantize<T, FUNC, NORM, EF, 3>
-    <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
-        input_data, output_data, feedback_data, num_elems,
-        bucket_size, states, ctx);
+        <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
+            input_data, output_data, feedback_data, num_elems, bucket_size,
+            states, ctx);
     break;
   case 4:
     quantize<T, FUNC, NORM, EF, 4>
-    <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
-        input_data, output_data, feedback_data, num_elems,
-        bucket_size, states, ctx);
+        <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
+            input_data, output_data, feedback_data, num_elems, bucket_size,
+            states, ctx);
     break;
   case 5:
     quantize<T, FUNC, NORM, EF, 5>
-    <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
-        input_data, output_data, feedback_data, num_elems,
-        bucket_size, states, ctx);
+        <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
+            input_data, output_data, feedback_data, num_elems, bucket_size,
+            states, ctx);
     break;
   case 6:
     quantize<T, FUNC, NORM, EF, 6>
-    <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
-        input_data, output_data, feedback_data, num_elems,
-        bucket_size, states, ctx);
+        <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
+            input_data, output_data, feedback_data, num_elems, bucket_size,
+            states, ctx);
     break;
   case 7:
     quantize<T, FUNC, NORM, EF, 7>
-    <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
-        input_data, output_data, feedback_data, num_elems,
-        bucket_size, states, ctx);
+        <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
+            input_data, output_data, feedback_data, num_elems, bucket_size,
+            states, ctx);
     break;
   case 8:
     quantize<T, FUNC, NORM, EF, 8>
-    <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
-        input_data, output_data, feedback_data, num_elems,
-        bucket_size, states, ctx);
+        <<<num_blocks, num_threads, shared_memory_block_size, stream>>>(
+            input_data, output_data, feedback_data, num_elems, bucket_size,
+            states, ctx);
     break;
   default:
-    printf("Wrong number of bits %i\n", bits);
+    printf("Wrong number of bits %i!!!\n", bits);
   }
   CUDA_CHECK(cudaGetLastError());
 }
@@ -551,12 +622,41 @@ inline void DEQUANTIZE(unsigned char* input, unsigned char* meta_info,
                        T* output, int num_elems, int bucket_size, int bits,
                        cudaStream_t stream, void* ctx, int num_blocks,
                        int num_threads) {
-  if (bits > 1) {
-    UnpackArray<T, FUNC, ADD, false><<<num_blocks, num_threads, 0, stream>>>(
-        input, meta_info, output, num_elems, bucket_size, bits, ctx);
-  } else {
-    UnpackArray<T, FUNC, ADD, true><<<num_blocks, num_threads, 0, stream>>>(
-        input, meta_info, output, num_elems, bucket_size, bits, ctx);
+  switch (bits) {
+  case 1:
+    UnpackArray<T, FUNC, ADD, 1><<<num_blocks, num_threads, 0, stream>>>(
+        input, meta_info, output, num_elems, bucket_size, ctx);
+    break;
+  case 2:
+    UnpackArray<T, FUNC, ADD, 2><<<num_blocks, num_threads, 0, stream>>>(
+        input, meta_info, output, num_elems, bucket_size, ctx);
+    break;
+  case 3:
+    UnpackArray<T, FUNC, ADD, 3><<<num_blocks, num_threads, 0, stream>>>(
+        input, meta_info, output, num_elems, bucket_size, ctx);
+    break;
+  case 4:
+    UnpackArray<T, FUNC, ADD, 4><<<num_blocks, num_threads, 0, stream>>>(
+        input, meta_info, output, num_elems, bucket_size, ctx);
+    break;
+  case 5:
+    UnpackArray<T, FUNC, ADD, 5><<<num_blocks, num_threads, 0, stream>>>(
+        input, meta_info, output, num_elems, bucket_size, ctx);
+    break;
+  case 6:
+    UnpackArray<T, FUNC, ADD, 6><<<num_blocks, num_threads, 0, stream>>>(
+        input, meta_info, output, num_elems, bucket_size, ctx);
+    break;
+  case 7:
+    UnpackArray<T, FUNC, ADD, 7><<<num_blocks, num_threads, 0, stream>>>(
+        input, meta_info, output, num_elems, bucket_size, ctx);
+    break;
+  case 8:
+    UnpackArray<T, FUNC, ADD, 8><<<num_blocks, num_threads, 0, stream>>>(
+        input, meta_info, output, num_elems, bucket_size, ctx);
+    break;
+  default:
+    printf("Wrong number of bits %i!!!\n", bits);
   }
   CUDA_CHECK(cudaGetLastError());
 }
