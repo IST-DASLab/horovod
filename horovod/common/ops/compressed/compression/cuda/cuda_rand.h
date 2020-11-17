@@ -61,6 +61,7 @@ __global__ void _init_curand(unsigned int seed, CurandState* states) {
 //      z[i] = (seed + index) % 128;
 //    states[index] = toInt(z);
   states[index] = xorshift128_init(seed * index);
+//  curand_init(seed, index, 0, &states[index]);
 }
 
 inline __device__ float xorshift128p(xorshift128p_state* state) {
@@ -75,6 +76,7 @@ inline __device__ float xorshift128p(xorshift128p_state* state) {
 }
 
 __device__ float GetRand(CurandState* state_p) {
+//  return curand_uniform(state_p);
   return ((float)xorshift128p(state_p)) / UINT64_MAX;
 //    return HybridTaus(state_p);
 }

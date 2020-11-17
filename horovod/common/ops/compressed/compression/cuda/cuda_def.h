@@ -6,10 +6,13 @@
 #include <stdint.h>
 #include <string>
 #include <stdexcept>
+#include <curand.h>
+#include <curand_kernel.h>
 
 #define Half __half
 //#define CurandState int
 #define CurandState horovod::common::cuda::xorshift128p_state
+//#define CurandState curandState
 
 #define CUDA_CHECK(condition)                                                  \
   do {                                                                         \
@@ -50,6 +53,16 @@ typedef union {
   float4 vec;
   float a[4];
 } F4;
+
+typedef union {
+  uchar2 vec;
+  unsigned char a[2];
+} U2;
+
+typedef union {
+  uchar3 vec;
+  unsigned char a[3];
+} U3;
 
 typedef union {
   uchar4 vec;

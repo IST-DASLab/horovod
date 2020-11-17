@@ -154,17 +154,15 @@ EncodeValue(T input, T* feedback, unsigned char* meta_info, T rand, void* ctx) {
 
 template <typename T, CompressFunc method, int BITS>
 inline __device__ T DecodeValue(unsigned char input, unsigned char* meta_info,
-                                unsigned int idx, int bucket_size,
-                                void* ctx) {
+                                unsigned int idx, int bucket_size, void* ctx) {
   switch (method) {
   case CompressFunc::MaxMin:
     return MaxMinDecodeValue<T>(input, meta_info, idx, bucket_size);
   case CompressFunc::NormWide:
     return NormWideDecodeValue<T, BITS>(input, meta_info, idx, bucket_size,
-                                           ctx);
+                                        ctx);
   case CompressFunc::NormPos:
-    return NormPosDecodeValue<T, BITS>(input, meta_info, idx, bucket_size,
-                                          ctx);
+    return NormPosDecodeValue<T, BITS>(input, meta_info, idx, bucket_size, ctx);
   default:
     printf("Wrong compression type\n");
     return 0;
@@ -243,39 +241,68 @@ __device__ void find_meta_parallel(T* input, unsigned char* meta, int num_elems,
 }
 
 template <int BITS>
-inline __device__ void store_output(const int64_t value, unsigned char* output) {
+inline __device__ void pack_value(const int64_t value, unsigned char* output,
+                                    unsigned int shift = 0) {
+#pragma unroll BITS
   for (unsigned int j = 0; j < BITS; j++) {
     output[j] = value >> (PACK_SIZE * j) & 0xFF;
   }
 }
 
-template<>
-inline __device__ void store_output<4>(const int64_t value, unsigned char* output) {
+template <>
+inline __device__ void pack_value<2>(const int64_t value,
+                                       unsigned char* output,
+                                       unsigned int shift) {
+  U2 output2;
+#pragma unroll 2
+  for (unsigned int j = 0; j < 2; j++) {
+    output2.a[j] = value >> (PACK_SIZE * (j + shift)) & 0xFF;
+  }
+  uchar2* output_p = reinterpret_cast<uchar2*>(output);
+  output_p[0] = output2.vec;
+}
+
+template <>
+inline __device__ void pack_value<3>(const int64_t value,
+                                       unsigned char* output,
+                                       unsigned int shift) {
+  U3 output3;
+#pragma unroll 3
+  for (unsigned int j = 0; j < 3; j++) {
+    output3.a[j] = value >> (PACK_SIZE * (j + shift)) & 0xFF;
+  }
+  uchar3* output_p = reinterpret_cast<uchar3*>(output);
+  output_p[0] = output3.vec;
+}
+
+template <>
+inline __device__ void pack_value<4>(const int64_t value,
+                                       unsigned char* output,
+                                       unsigned int shift) {
   U4 output4;
 #pragma unroll 4
-  for (unsigned int j = 0; j < 4; j++){
-    output4.a[j] = value >> (PACK_SIZE * j) & 0xFF;
+  for (unsigned int j = 0; j < 4; j++) {
+    output4.a[j] = value >> (PACK_SIZE * (j + shift)) & 0xFF;
   }
   uchar4* output_p = reinterpret_cast<uchar4*>(output);
   output_p[0] = output4.vec;
 }
 
-template<>
-inline __device__ void store_output<8>(const int64_t value, unsigned char* output) {
-  U4 output4;
-#pragma unroll 4
-  for (unsigned int j = 0; j < 4; j++){
-    output4.a[j] = value >> (PACK_SIZE * j) & 0xFF;
-  }
-  uchar4* output_p = reinterpret_cast<uchar4*>(output);
-  output_p[0] = output4.vec;
-#pragma unroll 4
-  for (unsigned int j = 0; j < 4; j++){
-    output4.a[j] = value >> (PACK_SIZE * j) & 0xFF;
-  }
-  output_p[1] = output4.vec;
+template <>
+inline __device__ void pack_value<6>(const int64_t value,
+                                       unsigned char* output,
+                                       unsigned int shift) {
+  pack_value<3>(value, output, 0);
+  pack_value<3>(value, output + 3, 3);
 }
 
+template <>
+inline __device__ void pack_value<8>(const int64_t value,
+                                       unsigned char* output,
+                                       unsigned int shift) {
+  pack_value<4>(value, output, 0);
+  pack_value<4>(value, output + 4, 4);
+}
 
 template <typename T, CompressFunc FUNC, bool EF, int BITS>
 __device__ void CompressBucket(T* input, unsigned char* output,
@@ -293,7 +320,7 @@ __device__ void CompressBucket(T* input, unsigned char* output,
     if (std::is_same<T, float>::value) {
       F4 input4;
       if (num_elems - i * PACK_SIZE >= PACK_SIZE) {
-#pragma unroll (PACK_SIZE / 4)
+#pragma unroll(PACK_SIZE / 4)
         for (unsigned int j = 0; j < PACK_SIZE; j += 4) {
           int idx = i * PACK_SIZE + j;
           input4.vec = (reinterpret_cast<float4*>(input + idx))[0];
@@ -323,7 +350,7 @@ __device__ void CompressBucket(T* input, unsigned char* output,
           output[i * BITS + j] = value >> (PACK_SIZE * j) & 0xFF;
         }
       } else {
-        store_output<BITS>(value, output + i * BITS);
+        pack_value<BITS>(value, output + i * BITS);
       }
     } else {
       for (unsigned int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems;
@@ -379,34 +406,53 @@ __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
   states[tid] = local_state;
 }
 
-
 template <int BITS>
-inline __device__ void unpack_value(unsigned char* input, uint64_t& value) {
+inline __device__ void unpack_value(unsigned char* input, uint64_t& value, unsigned shift = 0) {
   for (unsigned int j = 0; j < BITS; j++) {
     value |= ((uint64_t)input[j]) << (j * PACK_SIZE);
   }
 }
 
 template <>
-inline __device__ void unpack_value<4>(unsigned char* input, uint64_t& value) {
-  U4 input4;
-  input4.vec = reinterpret_cast<uchar4*>(input)[0];
-  for (unsigned int j = 0; j < 4; j++) {
-    value |= ((uint64_t)input4.a[j]) << (j * PACK_SIZE);
+inline __device__ void unpack_value<2>(unsigned char* input, uint64_t& value, unsigned int shift) {
+  U2 input2;
+  input2.vec = reinterpret_cast<uchar2*>(input)[0];
+#pragma unroll 3
+  for (unsigned int j = 0; j < 2; j++) {
+    value |= ((uint64_t)input2.a[j]) << ((j + shift) * PACK_SIZE);
   }
 }
 
 template <>
-inline __device__ void unpack_value<8>(unsigned char* input, uint64_t& value) {
+inline __device__ void unpack_value<3>(unsigned char* input, uint64_t& value, unsigned int shift) {
+  U3 input3;
+  input3.vec = reinterpret_cast<uchar3*>(input)[0];
+#pragma unroll 3
+  for (unsigned int j = 0; j < 3; j++) {
+    value |= ((uint64_t)input3.a[j]) << ((j + shift) * PACK_SIZE);
+  }
+}
+
+template <>
+inline __device__ void unpack_value<4>(unsigned char* input, uint64_t& value, unsigned int shift) {
   U4 input4;
   input4.vec = reinterpret_cast<uchar4*>(input)[0];
+#pragma unroll 4
   for (unsigned int j = 0; j < 4; j++) {
-    value |= ((uint64_t)input4.a[j]) << (j * PACK_SIZE);
+    value |= ((uint64_t)input4.a[j]) << ((j + shift) * PACK_SIZE);
   }
-  input4.vec = reinterpret_cast<uchar4*>(input)[1];
-  for (unsigned int j = 0; j < 4; j++) {
-    value |= ((uint64_t)input4.a[j]) << (j * PACK_SIZE);
-  }
+}
+
+template <>
+inline __device__ void unpack_value<6>(unsigned char* input, uint64_t& value, unsigned int shift) {
+  unpack_value<3>(input, value, 0);
+  unpack_value<3>(input + 3, value, 3);
+}
+
+template <>
+inline __device__ void unpack_value<8>(unsigned char* input, uint64_t& value, unsigned int shift) {
+  unpack_value<4>(input, value, 0);
+  unpack_value<4>(input + 4, value, 4);
 }
 
 template <typename T, CompressFunc FUNC, bool ADD, int BITS>
@@ -432,8 +478,7 @@ __global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
         for (unsigned int j = 0; j < num_elems - i * PACK_SIZE; j++) {
           unsigned char encoded_value = (value >> (j * BITS)) & (divisor - 1);
           T d = DecodeValue<T, FUNC, BITS>(encoded_value, meta_info,
-                                           i * PACK_SIZE + j, bucket_size,
-                                           ctx);
+                                           i * PACK_SIZE + j, bucket_size, ctx);
           if (ADD) {
             output[i * PACK_SIZE + j] = add(output[i * PACK_SIZE + j], d);
           } else {
@@ -442,22 +487,23 @@ __global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
         }
       } else {
         F4 output4;
-#pragma unroll (PACK_SIZE / 4)
+#pragma unroll(PACK_SIZE / 4)
         for (int j = 0; j < PACK_SIZE; j += 4) {
 #pragma unroll 4
           for (int k = 0; k < 4; k++) {
             unsigned char encoded_value =
                 (value >> ((j + k) * BITS)) & (divisor - 1);
             T d = DecodeValue<T, FUNC, BITS>(encoded_value, meta_info,
-                                             i * PACK_SIZE + j + k,
-                                             bucket_size, ctx);
+                                             i * PACK_SIZE + j + k, bucket_size,
+                                             ctx);
             if (ADD) {
               output4.a[k] = add((T)(output4.a[k]), d);
             } else {
               output4.a[k] = d;
             }
           }
-          float4* output_p = reinterpret_cast<float4*>(&output[i * PACK_SIZE + j]);
+          float4* output_p =
+              reinterpret_cast<float4*>(&output[i * PACK_SIZE + j]);
           *output_p = output4.vec;
         }
       }
@@ -468,8 +514,7 @@ __global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
       for (int j = 0; j < PACK_SIZE && i * PACK_SIZE + j < num_elems; j++) {
         unsigned char encoded_value = (value >> (j * BITS)) & (divisor - 1);
         T d = DecodeValue<T, FUNC, BITS>(encoded_value, meta_info,
-                                            i * PACK_SIZE + j, bucket_size,
-                                            ctx);
+                                         i * PACK_SIZE + j, bucket_size, ctx);
         if (ADD) {
           output[i * PACK_SIZE + j] = add(output[i * PACK_SIZE + j], d);
         } else {
