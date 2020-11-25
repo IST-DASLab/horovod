@@ -114,7 +114,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
     def _allreduce_grad_async(self, p):
         name = self._parameter_names.get(p)
         tensor = p.grad
-        tensor_compressed, ctx = self._compression.compress(p, 0)
+        tensor_compressed, ctx = self._compression.compress(p)
 
         if self.op == Average:
            # Split average operation across pre/postscale factors
@@ -311,7 +311,7 @@ class _DistributedAdasumOptimizer(torch.optim.Optimizer):
         p.data.sub_(start)
 
         # allreduce as before
-        tensor_compressed, ctx = self._compression.compress(p, 0)
+        tensor_compressed, ctx = self._compression.compress(p)
         handle = allreduce_async_(tensor_compressed.data, name=name, op=Adasum)
 
         # reset stashed parameters

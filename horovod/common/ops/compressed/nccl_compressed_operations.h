@@ -27,8 +27,8 @@ public:
                const Response& response) const override;
   bool EnabledName(const std::string& name) const;
 protected:
-  NCCLReducer *reducer;
-  ReductionType reduction_type_;
+  NCCLReducer *reducer_;
+  Compressor *compressor_;
 };
 
 } // namespace common

@@ -1,6 +1,6 @@
 #include "shm_tree.h"
-#include "shm_utils.h"
 #include "../utils.h"
+#include "shm_utils.h"
 
 namespace horovod {
 namespace common {
@@ -26,13 +26,7 @@ Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
   auto& timeline = global_state_->timeline;
   int64_t chunk_size =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
-  auto dtype = entries[0].tensor->dtype();
-  int64_t allocated_compression_buffer_size_send =
-      compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype);
-  int64_t allocated_compression_buffer_size_recv =
-      allocated_compression_buffer_size_send;
-  int64_t buffer_size = allocated_compression_buffer_size_send +
-                        allocated_compression_buffer_size_recv + chunk_size;
+  int64_t buffer_size = chunk_size + chunk_size + chunk_size;
   auto status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
       global_state_->current_nccl_stream,
@@ -51,9 +45,8 @@ Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
   void* buffer_data =
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_send_ = (unsigned char*)buffer_data;
-  gradients_recv_ =
-      (unsigned char*)gradients_send_ + allocated_compression_buffer_size_send;
-  decompress_buffer_ = gradients_recv_ + allocated_compression_buffer_size_recv;
+  gradients_recv_ = (unsigned char*)gradients_send_ + chunk_size;
+  decompress_buffer_ = gradients_recv_ + chunk_size;
 
   status = compressor_->Init(entries);
   if (!status.ok()) {
@@ -78,7 +71,7 @@ Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
     }
     if (comm_type_ == CommunicatorType::SHM) {
       shmComm* sComm = new shmComm(rank);
-      sComm->Init(comm, ranks, ranks, allocated_compression_buffer_size_send);
+      sComm->Init(comm, ranks, ranks, chunk_size);
       hcomm_.reset(sComm);
     }
   }

@@ -23,14 +23,7 @@ MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries,
   auto& timeline = global_state_->timeline;
   int64_t chunk_size =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
-  auto dtype = entries[0].tensor->dtype();
-  int64_t allocated_compression_buffer_size_send =
-      compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype);
-  int64_t allocated_compression_buffer_size_recv =
-      allocated_compression_buffer_size_send;
-  int64_t buffer_size =
-      allocated_compression_buffer_size_send +
-      allocated_compression_buffer_size_recv * (world_size - 1) + chunk_size;
+  int64_t buffer_size = chunk_size + chunk_size * (world_size - 1) + chunk_size;
 
   auto status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -50,11 +43,8 @@ MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries,
   void* buffer_data =
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_send_ = (unsigned char*)buffer_data;
-  gradients_recv_ =
-      (unsigned char*)gradients_send_ + allocated_compression_buffer_size_send;
-  decompress_buffer_ =
-      gradients_recv_ +
-      allocated_compression_buffer_size_recv * (world_size - 1);
+  gradients_recv_ = (unsigned char*)gradients_send_ + chunk_size;
+  decompress_buffer_ = gradients_recv_ + chunk_size * (world_size - 1);
   status = compressor_->Init(entries);
   if (!status.ok()) {
     return status;
@@ -73,12 +63,10 @@ Status MPI_Allreduce_AllGather::AllreduceDivision(
   gpuStream_t stream =
       gpu_context_
           ->streams[global_state_->current_nccl_stream][entries[0].device];
-
-  int64_t send_rcv_size = ALIGNED_SIZE(compressor_->Compress(
-      gradients_send_, entries, error_feedback_, 0, global_offset, num_elements,
-      true, false, &stream));
-  cudaStreamSynchronize(stream);
-  compressor_->Finalize();
+  int64_t send_rcv_size = ALIGNED_SIZE(
+      compressor_->Compress(gradients_send_, entries, error_feedback_, 0,
+                            global_offset, num_elements, true, false, &stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   timeline.ActivityEndAll(entries);
   std::vector<MPI_Request> requests;
   int count = 0;

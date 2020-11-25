@@ -320,7 +320,7 @@ __device__ void CompressBucket(T* input, unsigned char* output,
     if (std::is_same<T, float>::value) {
       F4 input4;
       if (num_elems - i * PACK_SIZE >= PACK_SIZE) {
-#pragma unroll(PACK_SIZE / 4)
+#pragma unroll PACK_SIZE / 4
         for (unsigned int j = 0; j < PACK_SIZE; j += 4) {
           int idx = i * PACK_SIZE + j;
           input4.vec = (reinterpret_cast<float4*>(input + idx))[0];
@@ -466,7 +466,7 @@ __global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
   for (unsigned int i = tid; i < (num_elems + PACK_SIZE - 1) / PACK_SIZE;
        i += stride) {
     uint64_t value = 0;
-    if (std::is_same<T, float>::value) {
+    if (std::is_same<T, int>::value) {
       if ((i + 1) * BITS > num_char) {
         for (unsigned int j = 0; j < num_char - i * BITS; j++)
           value |= ((uint64_t)input[i * BITS + j]) << (j * PACK_SIZE);

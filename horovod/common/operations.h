@@ -110,7 +110,7 @@ int horovod_reduce_op_sum();
 int horovod_reduce_op_adasum();
 
 // C interface to set quantization levels.
-void horovod_set_quantization_levels(float *levels);
+void horovod_set_quantization_levels(float *levels, int bits);
 
 }
 

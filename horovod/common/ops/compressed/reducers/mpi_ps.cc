@@ -4,12 +4,10 @@
 namespace horovod {
 namespace common {
 
-MPI_Allreduce_PS::MPI_Allreduce_PS(
-            MPIContext* mpi_context,
-            GPUContext* gpu_context,
-            HorovodGlobalState* global_state,
-            Compressor* compressor,
-            Summator* summator)
+MPI_Allreduce_PS::MPI_Allreduce_PS(MPIContext* mpi_context,
+                                   GPUContext* gpu_context,
+                                   HorovodGlobalState* global_state,
+                                   Compressor* compressor, Summator* summator)
     : MPIReducer(mpi_context, gpu_context, global_state, compressor, summator) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "MPI Parameter-Server";
@@ -25,14 +23,7 @@ Status MPI_Allreduce_PS::Init(
   auto& timeline = global_state_->timeline;
   int64_t chunk_size =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
-  auto dtype = entries[0].tensor->dtype();
-  int64_t allocated_compression_buffer_size_send =
-      compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype);
-  int64_t allocated_compression_buffer_size_recv =
-      allocated_compression_buffer_size_send;
-  int64_t buffer_size =
-      allocated_compression_buffer_size_send +
-      allocated_compression_buffer_size_recv * (world_size - 1);
+  int64_t buffer_size = chunk_size + chunk_size * (world_size - 1);
 
   auto status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -52,8 +43,7 @@ Status MPI_Allreduce_PS::Init(
   void* buffer_data =
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_send_ = (unsigned char*)buffer_data;
-  gradients_recv_ =
-      (unsigned char*)gradients_send_ + allocated_compression_buffer_size_send;
+  gradients_recv_ = (unsigned char*)gradients_send_ + chunk_size;
   status = compressor_->Init(entries);
   if (!status.ok()) {
     return status;
@@ -78,8 +68,8 @@ Status MPI_Allreduce_PS::AllreduceDivision(
   if (rank == 0) {
     std::vector<MPI_Request> requests;
     std::vector<int> idx_map;
-    send_rcv_size =
-        ALIGNED_SIZE(compressor_->BufferSize(num_elements, entries, 0, global_offset));
+    send_rcv_size = ALIGNED_SIZE(
+        compressor_->BufferSize(num_elements, entries, 0, global_offset));
 
     // First round.
     // Collect all gradients, decompress and aggregate them.
@@ -108,9 +98,9 @@ Status MPI_Allreduce_PS::AllreduceDivision(
                           global_offset, num_elements, false, true, &stream);
     compressor_->Finalize();
   } else {
-    send_rcv_size =
-        ALIGNED_SIZE(compressor_->Compress(gradients_send_, entries, error_feedback_, 0,
-                              global_offset, num_elements, true, false, &stream));
+    send_rcv_size = ALIGNED_SIZE(compressor_->Compress(
+        gradients_send_, entries, error_feedback_, 0, global_offset,
+        num_elements, true, false, &stream));
     compressor_->Finalize();
     op = MPI_Send(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, 0,
                   comm_);

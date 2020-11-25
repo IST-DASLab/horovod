@@ -31,9 +31,13 @@ public:
   }
 
   int64_t Compress(unsigned char* input, unsigned char* output,
-                   unsigned char* feedback, int64_t num_elems, DataType dtype, void* ctx) override;
+                   unsigned char* feedback, int64_t num_elems, DataType dtype,
+                   const CompressionModuleConfig& compression_cfg,
+                   void* ctx) override;
   void Decompress(unsigned char* input, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
+                  int64_t num_elems, DataType dtype, bool add,
+                  const CompressionModuleConfig& compression_cfg,
+                  void* ctx) override;
   Status Init(const std::vector<TensorTableEntry>& entries) override;
   void Finalize() override;
 
@@ -52,11 +56,15 @@ public:
 
   Status Init(const std::vector<TensorTableEntry>& entries) override;
   int64_t Compress(unsigned char* input, unsigned char* output,
-                   unsigned char* feedback, int64_t num_elems,
-                   DataType dtype, void* ctx) override;
+                   unsigned char* feedback, int64_t num_elems, DataType dtype,
+                   const CompressionModuleConfig& compression_cfg,
+                   void* ctx) override;
   void Decompress(unsigned char* input, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
-  int64_t BufferSize(int num_elems, DataType dtype) final;
+                  int64_t num_elems, DataType dtype, bool add,
+                  const CompressionModuleConfig& compression_cfg,
+                  void* ctx) override;
+  int64_t BufferSize(int num_elems, DataType dtype,
+                     const CompressionModuleConfig& compression_cfg) final;
   void Finalize();
 
 private:
@@ -77,17 +85,21 @@ public:
   }
 
   Status Init(const std::vector<horovod::common::TensorTableEntry>& entries);
-  void SetQuantizationLevels(float* levels) override;
+  void SetQuantizationLevels(float* levels, int bits) override;
   void Finalize();
-  int64_t BufferSize(int num_elems, DataType dtype) final;
+  int64_t BufferSize(int num_elems, DataType dtype,
+                     const CompressionModuleConfig& compression_cfg) final;
   int64_t Compress(unsigned char* input, unsigned char* output,
-                   unsigned char* feedback, int64_t num_elems,
-                   DataType dtype, void* ctx) override;
+                   unsigned char* feedback, int64_t num_elems, DataType dtype,
+                   const CompressionModuleConfig& compression_cfg,
+                   void* ctx) override;
   void Decompress(unsigned char* input, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add, void* ctx) override;
+                  int64_t num_elems, DataType dtype, bool add,
+                  const CompressionModuleConfig& compression_cfg,
+                  void* ctx) override;
 
 protected:
-  Half* levels_fp16_;
+  std::map<int, Half*> bits_to_levels_fp16_;
   std::unique_ptr<GPUCompressionContext> gpu_compression_context_;
 };
 

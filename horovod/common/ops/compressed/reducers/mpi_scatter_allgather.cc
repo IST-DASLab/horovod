@@ -21,16 +21,10 @@ Status MPI_Allreduce_ScatterReduceAllgather::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
-  auto dtype = entries[0].tensor->dtype();
-  int64_t allocated_compression_buffer_size_send =
-      round_to(compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype),
-               ALIGNMENT_UNIT);
-  int64_t allocated_compression_buffer_size_recv =
-      allocated_compression_buffer_size_send;
-  int64_t buffer_size =
-      allocated_compression_buffer_size_send * (world_size - 1) +
-      +allocated_compression_buffer_size_recv * (world_size - 1) + chunk_size;
+  int64_t chunk_size =
+      ALIGNED_SIZE((tensor_fusion_threshold_ + world_size - 1) / world_size);
+  int64_t buffer_size = chunk_size * (world_size - 1) +
+                        +chunk_size * (world_size - 1) + chunk_size;
 
   Status status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -52,11 +46,8 @@ Status MPI_Allreduce_ScatterReduceAllgather::Init(
   void* buffer_data =
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_send_ = (unsigned char*)buffer_data;
-  gradients_recv_ = gradients_send_ +
-                    allocated_compression_buffer_size_send * (world_size - 1);
-  decompress_buffer_ =
-      gradients_recv_ +
-      allocated_compression_buffer_size_recv * (world_size - 1);
+  gradients_recv_ = gradients_send_ + chunk_size * (world_size - 1);
+  decompress_buffer_ = gradients_recv_ + chunk_size * (world_size - 1);
   status = compressor_->Init(entries);
   if (!status.ok()) {
     for (auto& e : entries) {
@@ -80,13 +71,13 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
 
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
-  int residue = num_elements % world_size;
-  int num_elems_per_node = num_elements / world_size;
-  int start_elem = num_elems_per_node * rank + std::min(residue, rank);
-  int recv_num_elems = num_elems_per_node + (rank < residue ? 1 : 0);
-  int recv_compressed_size =
-      ALIGNED_SIZE(compressor_->BufferSize(recv_num_elems, entries, start_elem,
-                                       global_offset));
+  std::vector<int> chunk_sizes, offsets;
+  compressor_->GetSizesAndOffsets(num_elements, world_size, entries, offsets,
+                                  chunk_sizes);
+  int start_elem = offsets[rank];
+  int recv_num_elems = chunk_sizes[rank];
+  int recv_compressed_size = ALIGNED_SIZE(compressor_->BufferSize(
+      recv_num_elems, entries, start_elem, global_offset));
   int send_num_elems = 0;
   int send_compressed_size = 0;
   gpuStream_t stream =
@@ -103,16 +94,16 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     if (node_rank == rank) {
       continue;
     }
-    int64_t start_offset =
-        (num_elems_per_node * node_rank) + std::min(residue, node_rank);
-    send_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
-    send_compressed_size = ALIGNED_SIZE(
-        compressor_->Compress(send_buf, entries, error_feedback_, start_offset,
-                              global_offset, send_num_elems, true, false, &stream));
+    int64_t start_offset = offsets[node_rank];
+    send_num_elems = chunk_sizes[node_rank];
+    send_compressed_size = ALIGNED_SIZE(compressor_->Compress(
+        send_buf, entries, error_feedback_, start_offset, global_offset,
+        send_num_elems, true, false, &stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
     send_buf += send_compressed_size;
     send_sizes.push(send_compressed_size);
   }
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   compressor_->Finalize();
   timeline.ActivityEndAll(entries);
 
@@ -158,8 +149,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   // End of the first round.
 
   compressor_->Compress(gradients_send_, entries, error_feedback_, start_elem,
-                        global_offset, recv_num_elems, false, true,
-                        &stream);
+                        global_offset, recv_num_elems, false, true, &stream);
   cudaStreamSynchronize(stream);
   compressor_->Decompress(gradients_send_, entries, start_elem, global_offset,
                           recv_num_elems, false, &stream);
@@ -176,12 +166,10 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     if (node_rank == rank) {
       continue;
     }
-    int their_start_offset =
-        (num_elems_per_node * node_rank) + std::min(residue, node_rank);
-    recv_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
-    recv_compressed_size =
-        ALIGNED_SIZE(compressor_->BufferSize(recv_num_elems, entries,
-                                         their_start_offset, global_offset));
+    int their_start_offset = offsets[node_rank];
+    recv_num_elems = chunk_sizes[node_rank];
+    recv_compressed_size = ALIGNED_SIZE(compressor_->BufferSize(
+        recv_num_elems, entries, their_start_offset, global_offset));
 
     recv_requests.push_back(MPI_Request());
     MPI_CHECK(MPI_Irecv(recv_buf, recv_compressed_size, MPI_UNSIGNED_CHAR,
@@ -191,7 +179,8 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
                         MPI_UNSIGNED_CHAR, node_rank, 0, comm_,
                         &send_requests.back()));
     recv_buf += recv_compressed_size;
-    recv_offsets.emplace_back(recv_acc_size, their_start_offset, recv_num_elems);
+    recv_offsets.emplace_back(recv_acc_size, their_start_offset,
+                              recv_num_elems);
     recv_acc_size += recv_compressed_size;
   }
   while (recv_requests.size() > 0) {
@@ -200,7 +189,8 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     MPI_CHECK(MPI_Waitany((int)recv_requests.size(), recv_requests.data(),
                           &req_idx, MPI_STATUSES_IGNORE));
 
-    std::tie(recv_acc_size, their_start_offset, recv_num_elems) = recv_offsets[req_idx];
+    std::tie(recv_acc_size, their_start_offset, recv_num_elems) =
+        recv_offsets[req_idx];
     recv_requests.erase(recv_requests.begin() + req_idx);
     recv_offsets.erase(recv_offsets.begin() + req_idx);
     compressor_->Decompress(gradients_recv_ + recv_acc_size, entries,
@@ -223,7 +213,8 @@ void printDebug(float* bf, int num_elems, int device, std::string prefix) {
     host_buf = bf;
   } else {
     host_buf = new float[num_elems];
-    CUDA_CHECK(cudaMemcpy(host_buf, bf, num_elems * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(host_buf, bf, num_elems * sizeof(float),
+                          cudaMemcpyDeviceToHost));
   }
   for (int i = 0; i < num_elems; i++) {
     ss << host_buf[i] << " ";

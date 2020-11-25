@@ -32,9 +32,9 @@ class Compressor(object):
 
 class NoneCompressor(Compressor):
     """Default no-op compression."""
-    def compress(self, p, step):
+    def compress(self, p, step=-1):
         """Returns the tensor unmodified."""
-        if p.requires_grad:
+        if p.requires_grad and step != -1:
             return p.grad, None
         else:
             return p, None
@@ -46,7 +46,7 @@ class NoneCompressor(Compressor):
 
 class FP16Compressor(Compressor):
     """Compress all floating point gradients to 16-bit."""
-    def compress(self, p, step):
+    def compress(self, p, step=0):
         """Downcasts the tensor to 16-bit."""
         if p.requires_grad:
             tensor = p.grad
@@ -69,7 +69,7 @@ class FP16Compressor(Compressor):
 
 class FP32Compressor(Compressor):
     """Decompress all floating 32 gradients to 32-bit."""
-    def compress(self, p, step):
+    def compress(self, p, step=0):
         """Upcasts the tensor to 32-bit."""
         if p.requires_grad:
             tensor = p.grad

@@ -26,15 +26,9 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
-  auto dtype = entries[0].tensor->dtype();
-  int64_t allocated_compression_buffer_size_send = ALIGNED_SIZE(
-      compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype));
-  int64_t allocated_compression_buffer_size_recv =
-      allocated_compression_buffer_size_send;
-  int64_t buffer_size =
-      allocated_compression_buffer_size_send * world_size +
-      +allocated_compression_buffer_size_recv * (world_size - 1);
+  int64_t chunk_size =
+      ALIGNED_SIZE((tensor_fusion_threshold_ + world_size - 1) / world_size);
+  int64_t buffer_size = chunk_size * world_size + chunk_size * (world_size - 1);
 
   // Allocate buffers used for compression/decompression.
   Status status = bufferManager_.InitializeBuffer(
@@ -56,8 +50,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
   void* buffer_data =
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_send_ = (unsigned char*)buffer_data;
-  gradients_recv_ =
-      gradients_send_ + allocated_compression_buffer_size_send * world_size;
+  gradients_recv_ = gradients_send_ + chunk_size * world_size;
 
   status = compressor_->Init(entries);
   if (!status.ok()) {
@@ -87,12 +80,11 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
 
     if (comm_type_ == CommunicatorType::SHM) {
       shmComm* sComm = new shmComm(rank);
-      sComm->Init(comm, ranks, ranks, 2 * allocated_compression_buffer_size_send);
+      sComm->Init(comm, ranks, ranks, 2 * chunk_size);
       hcomm_.reset(sComm);
     } else if (comm_type_ == CommunicatorType::P2P) {
       p2pComm* pComm = new p2pComm(rank);
-      pComm->Init(comm, ranks, ranks, gradients_recv_,
-                  allocated_compression_buffer_size_recv);
+      pComm->Init(comm, ranks, ranks, gradients_recv_, chunk_size);
       hcomm_.reset(pComm);
     }
   }
@@ -116,10 +108,11 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     int64_t global_offset) {
   int world_size = global_state_->controller->GetSize();
   int rank = global_state_->controller->GetRank();
-  int residue = num_elements % world_size;
-  int num_elems_per_node = num_elements / world_size;
-  int start_elem = num_elems_per_node * rank + std::min(residue, rank);
-  int recv_num_elems = num_elems_per_node + (rank < residue ? 1 : 0);
+  std::vector<int> chunk_sizes, offsets;
+  compressor_->GetSizesAndOffsets(num_elements, world_size, entries, offsets,
+                                  chunk_sizes);
+  int start_elem = offsets[rank];
+  int recv_num_elems = chunk_sizes[rank];
   int recv_compressed_size = ALIGNED_SIZE(compressor_->BufferSize(
       recv_num_elems, entries, start_elem, global_offset));
   int send_num_elems = 0;
@@ -135,9 +128,8 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     if (node_rank == rank) {
       continue;
     }
-    int start_offset =
-        (num_elems_per_node * node_rank) + std::min(residue, node_rank);
-    send_num_elems = num_elems_per_node + ((node_rank < residue) ? 1 : 0);
+    int start_offset = offsets[node_rank];
+    send_num_elems = chunk_sizes[node_rank];
 
     compressed_size = ALIGNED_SIZE(compressor_->Compress(
         compressed_buf, entries, error_feedback_, start_offset, global_offset,
@@ -162,8 +154,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     for (auto it = indices.begin(); it != indices.end();) {
       node_rank = *it;
       if (hcomm_->RecvBufAsync((void**)&peer_buf, node_rank,
-                                  streams_[node_rank])) {
-//        printDebug((float*)peer_buf, 8, entries[0].device, "Received: ");
+                               streams_[node_rank])) {
         it = indices.erase(it);
         int idx = node_rank - ((node_rank > rank) ? 1 : 0);
         CUDA_CHECK(cudaMemcpyAsync(gradients_recv_ + idx * recv_compressed_size,
@@ -227,10 +218,8 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
       if (hcomm_->RecvBufAsync((void**)&peer_buf, node_rank,
                                streams_[node_rank], recv_shm_offset)) {
         it = indices.erase(it);
-        int their_start_offset =
-            (num_elems_per_node * node_rank) + std::min(residue, node_rank);
-        int their_recv_num_elems =
-            num_elems_per_node + ((node_rank < residue) ? 1 : 0);
+        int their_start_offset = offsets[node_rank];
+        int their_recv_num_elems = chunk_sizes[node_rank];
         int compressed_offset = cumm_compressed_offsets[node_rank];
         compressed_size = compressed_offsets[node_rank];
         cudaMemcpyAsync(gradients_recv_ + compressed_offset, peer_buf,
@@ -245,7 +234,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     }
   }
   for (auto stream : streams_) {
-    cudaStreamSynchronize(stream);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
   }
   hcomm_->WaitSendAll();
   return Status::OK();

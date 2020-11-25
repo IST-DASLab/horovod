@@ -21,11 +21,8 @@ Status NCCL_Allreduce_AllGather::Init(
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
   int64_t chunk_size = tensor_fusion_threshold_;
-  auto dtype = entries[0].tensor->dtype();
-  int64_t allocated_compression_buffer_size_send =
-      compressor_->BufferSize(chunk_size / get_sizeof(dtype), dtype);
   int64_t buffer_size =
-      allocated_compression_buffer_size_send * world_size + chunk_size;
+      chunk_size * world_size + chunk_size;
 
   auto status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -45,7 +42,7 @@ Status NCCL_Allreduce_AllGather::Init(
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_recv_ = (unsigned char*)buffer_data;
   decompress_buffer_ =
-      gradients_recv_ + allocated_compression_buffer_size_send * world_size;
+      gradients_recv_ + chunk_size * world_size;
   stream_ =
       &gpu_context_
            ->streams[global_state_->current_nccl_stream][entries[0].device];

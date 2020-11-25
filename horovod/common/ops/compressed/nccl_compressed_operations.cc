@@ -14,27 +14,28 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
     HorovodGlobalState* global_state,
     horovod::common::Communicator mpi_communicator)
     : NCCLAllreduce(nccl_context, gpu_context, global_state, mpi_communicator) {
-  Compressor* compressor = CreateGPUCompressor(gpu_context, global_state);
+  compressor_ = CreateGPUCompressor(gpu_context, global_state);
+
   auto summator = new GPUSummator(global_state, gpu_context);
-  reduction_type_ = GetEnumEnvOrDefault<ReductionType>(
+  auto reduction_type = GetEnumEnvOrDefault<ReductionType>(
       HOROVOD_REDUCTION, ReductionType::NoneReduction);
   auto communicator_type = GetEnumEnvOrDefault<CommunicatorType>(
-      HOROVOD_COMMUNICATOR, CommunicatorType::NoneCommunicator);
+      HOROVOD_COMMUNICATOR, CommunicatorType::MPI);
   if (communicator_type != CommunicatorType::NCCL) {
-    reducer = nullptr;
+    reducer_ = nullptr;
     return;
   }
 
-  switch (reduction_type_) {
+  switch (reduction_type) {
   case ReductionType::AllGather:
-    reducer = new NCCL_Allreduce_AllGather(nccl_context, gpu_context,
+    reducer_ = new NCCL_Allreduce_AllGather(nccl_context, gpu_context,
                                            &gpu_op_context_, global_state,
-                                           compressor, summator);
+                                           compressor_, summator);
     break;
   case ReductionType::ScatterAllgather:
 #ifdef NCCL_P2P_SUPPORTED
-    reducer = new NCCL_Allreduce_ScatterAllgather(
-        nccl_context, gpu_context, &gpu_op_context_, global_state, compressor,
+    reducer_ = new NCCL_Allreduce_ScatterAllgather(
+        nccl_context, gpu_context, &gpu_op_context_, global_state, compressor_,
         summator);
     break;
 #else
@@ -43,9 +44,9 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
 #endif
   case ReductionType::Ring:
 #ifdef NCCL_P2P_SUPPORTED
-    reducer =
+    reducer_ =
         new NCCL_Allreduce_Ring(nccl_context, gpu_context, &gpu_op_context_,
-                                global_state, compressor, summator);
+                                global_state, compressor_, summator);
     break;
 #else
     throw std::logic_error(
@@ -53,21 +54,21 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
         std::to_string(NCCL_VERSION_CODE));
 #endif
   default:
-    reducer = nullptr;
+    reducer_ = nullptr;
     break;
   }
 }
 
-NCCL_CompressedAllreduce::~NCCL_CompressedAllreduce() { delete reducer; }
+NCCL_CompressedAllreduce::~NCCL_CompressedAllreduce() { delete reducer_; }
 
 Status NCCL_CompressedAllreduce::Allreduce(
     int num_elements, std::vector<horovod::common::TensorTableEntry>& entries,
     int buffer_len) {
-  Status status = reducer->Init(entries);
+  Status status = reducer_->Init(entries);
   if (!status.ok()) {
     return status;
   }
-  reducer->ApplyErrorFeedback(entries);
+  reducer_->ApplyErrorFeedback(entries);
   int64_t tensor_fusion_threshold =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
   if (buffer_len > tensor_fusion_threshold) {
@@ -81,7 +82,7 @@ Status NCCL_CompressedAllreduce::Allreduce(
            buffer_len % tensor_fusion_threshold != 0)
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
-      status = reducer->AllreduceDivision(num_elements_division,
+      status = reducer_->AllreduceDivision(num_elements_division,
                                           nccl_op_context_.nccl_comm_, entries,
                                           global_offset);
       if (!status.ok())
@@ -89,7 +90,7 @@ Status NCCL_CompressedAllreduce::Allreduce(
       global_offset += (tensor_fusion_threshold / sizeof(float));
     }
   } else {
-    status = reducer->AllreduceDivision(
+    status = reducer_->AllreduceDivision(
         num_elements, nccl_op_context_.nccl_comm_, entries, 0l);
   }
   return status;
@@ -121,14 +122,20 @@ Status NCCL_CompressedAllreduce::Execute(
 }
 
 bool NCCL_CompressedAllreduce::EnabledName(const std::string& name) const {
-  return name.find("bias") == std::string::npos;
+  if (reducer_ != nullptr and compressor_ != nullptr) {
+    for (auto& ignore : compressor_->GetIgnoreModules()) {
+      if (name.find(ignore) != std::string::npos)
+        return false;
+    }
+  }
+  return true;
 }
 
 bool NCCL_CompressedAllreduce::Enabled(
     const ParameterManager& param_manager,
     const std::vector<TensorTableEntry>& entries,
     const Response& response) const {
-  if (reducer == nullptr ||
+  if (reducer_ == nullptr ||
       NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *
               sizeof(float) <
           BUFFER_THRESHOLD ||

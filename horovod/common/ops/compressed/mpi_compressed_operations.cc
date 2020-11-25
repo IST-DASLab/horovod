@@ -18,9 +18,9 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
   auto compression_type = GetEnumEnvOrDefault<CompressionType>(
       HOROVOD_COMPRESSION, CompressionType::NoneCompression);
   auto communicator_type = GetEnumEnvOrDefault<CommunicatorType>(
-      HOROVOD_COMMUNICATOR, CommunicatorType::NoneCommunicator);
+      HOROVOD_COMMUNICATOR, CommunicatorType::MPI);
   if (communicator_type != CommunicatorType::MPI) {
-    mpiReducer = nullptr;
+    reducer_ = nullptr;
     return;
   }
   auto norm_type = GetEnumEnvOrDefault<NormType>(HOROVOD_COMPRESSION_NORM_TYPE,
@@ -28,18 +28,17 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
   auto levels_type = GetEnumEnvOrDefault<LevelsType>(
       HOROVOD_COMPRESSION_LEVELS_TYPE, LevelsType::Pos);
   auto quantization_bits = GetIntEnvOrDefault(HOROVOD_QUANTIZATION_BITS, 32);
-  Compressor* compressor;
   if (quantization_bits == 32 ||
       compression_type == CompressionType::NoneCompression) {
-    compressor = new CPUDummyCompressor(global_state);
+    compressor_ = new CPUDummyCompressor(global_state);
   } else {
     switch (compression_type) {
     case CompressionType::MaxMin:
-      compressor = new CPUMaxMinQuantizer(global_state, quantization_bits);
+      compressor_ = new CPUMaxMinQuantizer(global_state, quantization_bits);
       break;
     case CompressionType::Exp:
     case CompressionType::Uni:
-      compressor =
+      compressor_ =
           new CPUNormalizedQuantizer(global_state, quantization_bits,
                                      compression_type, norm_type, levels_type);
       break;
@@ -50,37 +49,37 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
   auto summator = new CPUSummator();
   switch (reduction_type) {
   case ReductionType::AllGather:
-    mpiReducer = new MPI_Allreduce_AllGather(
-        mpi_context, gpu_context, global_state, compressor, summator);
+    reducer_ = new MPI_Allreduce_AllGather(
+        mpi_context, gpu_context, global_state, compressor_, summator);
     break;
   case ReductionType::Ring:
-    mpiReducer = new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state,
-                                        compressor, summator);
+    reducer_ = new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state,
+                                        compressor_, summator);
     break;
   case ReductionType::ScatterAllgather:
-    mpiReducer = new MPI_Allreduce_ScatterReduceAllgather(
-        mpi_context, gpu_context, global_state, compressor, summator);
+    reducer_ = new MPI_Allreduce_ScatterReduceAllgather(
+        mpi_context, gpu_context, global_state, compressor_, summator);
     break;
   case ReductionType::PS:
-    mpiReducer = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
-                                      compressor, summator);
+    reducer_ = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
+                                      compressor_, summator);
     break;
   default:
-    mpiReducer = nullptr;
+    reducer_ = nullptr;
     break;
   }
 }
 
-MPI_CompressedAllReduce::~MPI_CompressedAllReduce() { delete mpiReducer; }
+MPI_CompressedAllReduce::~MPI_CompressedAllReduce() { delete reducer_; }
 
 Status MPI_CompressedAllReduce::Allreduce(
     int num_elements, MPI_Comm comm,
     std::vector<horovod::common::TensorTableEntry>& entries, int buffer_len) {
-  Status status = mpiReducer->Init(entries, comm);
+  Status status = reducer_->Init(entries, comm);
   if (!status.ok()) {
     return status;
   }
-  mpiReducer->ApplyErrorFeedback(entries);
+  reducer_->ApplyErrorFeedback(entries);
   int64_t tensor_fusion_threshold =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
   if (buffer_len > tensor_fusion_threshold) {
@@ -94,14 +93,14 @@ Status MPI_CompressedAllReduce::Allreduce(
            buffer_len % tensor_fusion_threshold != 0)
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
-      status = mpiReducer->AllreduceDivision(num_elements_division, entries,
+      status = reducer_->AllreduceDivision(num_elements_division, entries,
                                              global_offset);
       if (!status.ok())
         break;
       global_offset += (tensor_fusion_threshold / sizeof(float));
     }
   } else {
-    status = mpiReducer->AllreduceDivision(num_elements, entries, 0l);
+    status = reducer_->AllreduceDivision(num_elements, entries, 0l);
   }
   return status;
 }
@@ -127,11 +126,22 @@ Status MPI_CompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
   return status;
 }
 
+bool MPI_CompressedAllReduce::EnabledName(const std::string& name) const {
+  if (reducer_ != nullptr and compressor_ != nullptr) {
+    for (auto& ignore : compressor_->GetIgnoreModules()) {
+      if (name.find(ignore) != std::string::npos)
+        return false;
+    }
+  }
+  return true;
+}
+
+
 bool MPI_CompressedAllReduce::Enabled(
     const horovod::common::ParameterManager& param_manager,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     const horovod::common::Response& response) const {
-  if (mpiReducer == nullptr ||
+  if (reducer_ == nullptr ||
       NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *
               sizeof(float) <
           BUFFER_THRESHOLD ||

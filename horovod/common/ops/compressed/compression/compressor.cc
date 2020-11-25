@@ -2,12 +2,12 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <yaml.h>
 
 #include "../../../logging.h"
 #include "../../../utils/env_parser.h"
 #include "../common.h"
 #include "../utils.h"
-
 
 #include "../reducers/reducer.h"
 
@@ -23,14 +23,48 @@ void PackBucket(float* input, unsigned char* output, float* feedback,
 void UnpackBucket(unsigned char* input, float* output, int num_elems, int bits,
                   bool add, std::function<float(unsigned char)> decode);
 
-void Compressor::SetQuantizationLevels(float* levels) {
+void Compressor::SetQuantizationLevels(float* levels, int bits) {
   std::cout << "I don't set anything" << std::endl;
 }
 
 Compressor::Compressor(HorovodGlobalState* global_state)
     : global_state_(global_state) {
-  bucket_size_ = GetIntEnvOrDefault(HOROVOD_COMPRESSION_BUCKET_SIZE,
-                                    COMPRESSION_BUCKET_SIZE);
+  default_config.bucket_size = GetIntEnvOrDefault(
+      HOROVOD_COMPRESSION_BUCKET_SIZE, COMPRESSION_BUCKET_SIZE);
+  const char* config_filename = std::getenv(HOROVOD_COMPRESSION_CONFIG_FILE);
+  if (config_filename != nullptr) {
+    ParseYaml(config_filename);
+  }
+}
+
+CompressionModuleConfig& Compressor::GetModuleConfig(const std::string& name) {
+  for (auto& module : modules_configs) {
+    if (name.find(module.first) != std::string::npos) {
+      auto& config = module.second;
+      config.quantization_bits = (config.quantization_bits > 0)
+                                     ? config.quantization_bits
+                                     : default_config.quantization_bits;
+      config.bucket_size = (config.bucket_size > 0)
+                               ? config.bucket_size
+                               : default_config.bucket_size;
+      return config;
+    }
+  }
+  return default_config;
+}
+
+void Compressor::GetSizesAndOffsets(int num_elements, int world_size,
+                                    const std::vector<TensorTableEntry>& entries,
+                                    std::vector<int>& offsets,
+                                    std::vector<int>& sizes) {
+  int residue = num_elements % world_size;
+  int num_elems_per_node = num_elements / world_size;
+  int offset = 0;
+  for (int rank = 0; rank < world_size; rank++) {
+    sizes.push_back(num_elems_per_node + ((rank < residue) ? 1 : 0));
+    offsets.push_back(offset);
+    offset += sizes.back();
+  }
 }
 
 int64_t Compressor::BufferSize(
@@ -39,7 +73,8 @@ int64_t Compressor::BufferSize(
     int64_t fusion_offset, int64_t global_offset) {
   auto dtype = entries[0].tensor->dtype();
   if (entries.size() == 1) {
-    return BufferSize(chunk_num_elems, dtype);
+    return BufferSize(chunk_num_elems, dtype,
+                      GetModuleConfig(entries[0].tensor_name));
   }
 
   int64_t offset_cumm = 0;
@@ -68,7 +103,7 @@ int64_t Compressor::BufferSize(
       nelem = fusion_offset + chunk_num_elems -
               std::max(offset_cumm, fusion_offset);
     }
-    sum_result += BufferSize(nelem, dtype);
+    sum_result += BufferSize(nelem, dtype, GetModuleConfig(entry.tensor_name));
     offset_cumm += entry.tensor->shape().num_elements();
   }
   return sum_result;
@@ -88,7 +123,8 @@ int64_t Compressor::Compress(
                       (global_offset + fusion_offset) * get_sizeof(dtype);
 
     total_compressed_size =
-        Compress(input_data, output, feedback_data, chunk_num_elems, dtype, ctx);
+        Compress(input_data, output, feedback_data, chunk_num_elems, dtype,
+                 GetModuleConfig(entries[0].tensor_name), ctx);
   } else {
     int64_t offset_cumm = 0;
     int64_t nelem = 0;
@@ -124,13 +160,13 @@ int64_t Compressor::Compress(
       if (!disable_error_feedback && error_feedback.isEnabled())
         feedback_data = error_feedback.GetData(entry) + offset;
       compressed_size =
-          Compress(input_data + offset, feedback_data, output, nelem, dtype, ctx);
+          Compress(input_data + offset, feedback_data, output, nelem, dtype,
+                   GetModuleConfig(entry.tensor_name), ctx);
       offset_cumm += entry.tensor->shape().num_elements();
       output += compressed_size;
       total_compressed_size += compressed_size;
     }
   }
-  //  Finalize();
   return total_compressed_size;
 }
 
@@ -141,7 +177,8 @@ void Compressor::Decompress(unsigned char* input_data,
                             bool add, void* ctx) {
   auto dtype = entries[0].tensor->dtype();
   if (entries.size() == 1) {
-    Decompress(input_data, output_data, chunk_num_elems, dtype, add, ctx);
+    Decompress(input_data, output_data, chunk_num_elems, dtype, add,
+               GetModuleConfig(entries[0].tensor_name), ctx);
   } else {
     int64_t offset_cumm = 0;
     int64_t nelem = 0;
@@ -168,21 +205,23 @@ void Compressor::Decompress(unsigned char* input_data,
         nelem = fusion_offset + chunk_num_elems -
                 std::max(offset_cumm, fusion_offset);
       }
+      auto& module_config = GetModuleConfig(entry.tensor_name);
       buffer_offset = std::max(offset_cumm - fusion_offset, 0l);
       output = output_data + buffer_offset * get_sizeof(dtype);
-      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add, ctx);
-      cumm_decompressed += BufferSize(nelem, dtype);
+      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add,
+                 module_config, ctx);
+      cumm_decompressed += BufferSize(nelem, dtype, module_config);
       offset_cumm += entry.tensor->shape().num_elements();
     }
   }
-  //  Finalize();
 }
 
 int64_t Compressor::Compress(
     unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     ErrorFeedback& error_feedback, int64_t fusion_offset, int64_t global_offset,
-    int64_t chunk_num_elems, bool original, bool disable_error_feedback, void* ctx) {
+    int64_t chunk_num_elems, bool original, bool disable_error_feedback,
+    void* ctx) {
   auto get_tensor_data =
       [original](const horovod::common::TensorTableEntry& entry) {
         if (original)
@@ -198,9 +237,9 @@ int64_t Compressor::Compress(
     unsigned char* feedback_data = nullptr;
     if (!disable_error_feedback && error_feedback.isEnabled())
       feedback_data = error_feedback.GetData(entries[0]) + offset;
-    total_compressed_size =
-        Compress(get_tensor_data(entries[0]) + offset, output, feedback_data,
-                 chunk_num_elems, dtype, ctx);
+    total_compressed_size = Compress(
+        get_tensor_data(entries[0]) + offset, output, feedback_data,
+        chunk_num_elems, dtype, GetModuleConfig(entries[0].tensor_name), ctx);
   } else {
 
     int64_t offset_cumm = 0;
@@ -234,10 +273,12 @@ int64_t Compressor::Compress(
       auto offset = buffer_offset * get_sizeof(dtype);
       auto tensor_data = get_tensor_data(entry) + offset;
       unsigned char* feedback_data = nullptr;
+
       if (!disable_error_feedback && error_feedback.isEnabled())
         feedback_data = error_feedback.GetData(entry) + offset;
       compressed_size =
-          Compress(tensor_data, output, feedback_data, nelem, dtype, ctx);
+          Compress(tensor_data, output, feedback_data, nelem, dtype,
+                   GetModuleConfig(entry.tensor_name), ctx);
       offset_cumm += entry.tensor->shape().num_elements();
       output += compressed_size;
       total_compressed_size += compressed_size;
@@ -258,7 +299,8 @@ void Compressor::Decompress(
                ((unsigned char*)entries[0].output->data()) +
                    fusion_offset * get_sizeof(dtype) +
                    global_offset * get_sizeof(dtype),
-               chunk_num_elems, dtype, add, ctx);
+               chunk_num_elems, dtype, add,
+               GetModuleConfig(entries[0].tensor_name), ctx);
   } else {
     int64_t offset_cumm = 0;
     int64_t nelem = 0;
@@ -288,9 +330,10 @@ void Compressor::Decompress(
       }
       auto output = ((unsigned char*)entry.output->data()) +
                     buffer_offset * get_sizeof(dtype);
-
-      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add, ctx);
-      cumm_decompressed += BufferSize(nelem, dtype);
+      const auto& module_config = GetModuleConfig(entry.tensor_name);
+      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add,
+                 module_config, ctx);
+      cumm_decompressed += BufferSize(nelem, dtype, module_config);
       offset_cumm += entry.tensor->shape().num_elements();
     }
   }
@@ -302,24 +345,26 @@ void Compressor::Finalize() {}
 // ================
 // Dummy Compressor
 // ================
-int64_t DummyCompressor::BufferSize(int num_elems,
-                                    horovod::common::DataType dtype) {
+int64_t
+DummyCompressor::BufferSize(int num_elems, horovod::common::DataType dtype,
+                            const CompressionModuleConfig& compression_cfg) {
   return num_elems * get_sizeof(dtype);
 }
 
-int64_t CPUDummyCompressor::Compress(unsigned char* input_data,
-                                     unsigned char* output,
-                                     unsigned char* feedback_data,
-                                     int64_t num_elems, DataType dtype, void* ctx) {
+int64_t CPUDummyCompressor::Compress(
+    unsigned char* input_data, unsigned char* output,
+    unsigned char* feedback_data, int64_t num_elems, DataType dtype,
+    const CompressionModuleConfig& compression_cfg, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   int64_t processed_size = num_elems * sizeof(float);
   std::memcpy(output, input_data, processed_size);
   return processed_size;
 }
 
-void CPUDummyCompressor::Decompress(unsigned char* input_data,
-                                    unsigned char* output, int64_t num_elems,
-                                    DataType dtype, bool add, void* ctx) {
+void CPUDummyCompressor::Decompress(
+    unsigned char* input_data, unsigned char* output, int64_t num_elems,
+    DataType dtype, bool add, const CompressionModuleConfig& compression_cfg,
+    void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   if (add) {
     float* output_f = (float*)output;
@@ -337,69 +382,118 @@ void CPUDummyCompressor::Decompress(unsigned char* input_data,
 // ================
 Quantizer::Quantizer(horovod::common::HorovodGlobalState* global_state,
                      int quantization_bits)
-    : Compressor(global_state), bits_(quantization_bits) {}
+    : Compressor(global_state) {
+  default_config.quantization_bits = quantization_bits;
+}
 
+void Quantizer::GetSizesAndOffsets(int num_elements, int world_size,
+                                   const std::vector<TensorTableEntry>& entries,
+                                   std::vector<int>& offsets,
+                                   std::vector<int>& sizes) {
+  if (default_config.quantization_bits == 32) {
+    Compressor::GetSizesAndOffsets(num_elements, world_size, entries, offsets, sizes);
+    return;
+  }
+  int offset = 0;
+  int num_per_node;
+  auto it = entries.begin();
+  int entry_offset = 0;
+  int n_elem = std::min((int) it->tensor->shape().num_elements(), num_elements);
+  int cur_size = 0;
+  for (int rank = 0; rank < world_size; rank++) {
+    num_per_node = num_elements / (world_size - rank);
+    cur_size = 0;
+    while (cur_size < num_per_node) {
+      if (n_elem <= num_per_node - cur_size) {
+        cur_size += n_elem;
+        it++;
+        if (it == entries.end())
+          break;
+        n_elem = std::min((int) it->tensor->shape().num_elements(), num_elements);
+      } else {
+        int aligned = std::min((int) round_to(num_per_node - cur_size, 4), n_elem);
+        cur_size += aligned;
+        n_elem -= aligned;
+      }
+    }
+    num_elements -= cur_size;
+    sizes.push_back(cur_size);
+    offsets.push_back(offset);
+    offset += cur_size;
+  }
+}
 // ================
 // Max Min Quantizer
 // ================
-inline int64_t CPUMaxMinQuantizer::BufferSize(int num_elems, DataType dtype) {
+inline int64_t
+CPUMaxMinQuantizer::BufferSize(int num_elems, DataType dtype,
+                               const CompressionModuleConfig& compression_cfg) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
-  int64_t compressed_values_buffer_size = (num_elems * bits_ + 7) / 8;
-  int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
+  const int bits = compression_cfg.quantization_bits;
+  const int bucket_size = compression_cfg.bucket_size;
+  int64_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
+  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   // Max min buffer to allocate
   int64_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-int64_t CPUMaxMinQuantizer::Compress(unsigned char* input_data,
-                                     unsigned char* output,
-                                     unsigned char* feedback_data,
-                                     int64_t num_elems, DataType dtype, void* ctx) {
+int64_t CPUMaxMinQuantizer::Compress(
+    unsigned char* input_data, unsigned char* output,
+    unsigned char* feedback_data, int64_t num_elems, DataType dtype,
+    const CompressionModuleConfig& compression_cfg, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
-  int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
+  int bits = compression_cfg.quantization_bits;
+  int bucket_size = compression_cfg.bucket_size;
+  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   int64_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
-  int64_t compressed_values_buffer_size = (num_elems * bits_ + 7) / 8;
+  int64_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
 
   auto meta_info_buffer = (float*)output;
   output += meta_buffer_size;
   for (int64_t bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
     CompressBucket(
-        input_data, meta_info_buffer, output, feedback_data,
-        std::min((int64_t)bucket_size_, num_elems - bucket_no * bucket_size_),
+        input_data, meta_info_buffer, output, feedback_data, compression_cfg,
+        std::min((int64_t)bucket_size, num_elems - bucket_no * bucket_size),
         bucket_no);
   }
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-void CPUMaxMinQuantizer::Decompress(unsigned char* input_data,
-                                    unsigned char* output, int64_t num_elems,
-                                    DataType dtype, bool add, void* ctx) {
+void CPUMaxMinQuantizer::Decompress(
+    unsigned char* input_data, unsigned char* output, int64_t num_elems,
+    DataType dtype, bool add, const CompressionModuleConfig& compression_cfg,
+    void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
-  int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
+  int bits = compression_cfg.quantization_bits;
+  int bucket_size = compression_cfg.bucket_size;
+  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   int64_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
 
   auto meta_info_buffer = (float*)input_data;
   input_data += meta_buffer_size;
   for (int64_t bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
     DecompressBucket(
-        input_data, meta_info_buffer, output,
-        std::min((int64_t)bucket_size_, num_elems - bucket_no * bucket_size_),
+        input_data, meta_info_buffer, output, compression_cfg,
+        std::min((int64_t)bucket_size, num_elems - bucket_no * bucket_size),
         bucket_no, add);
   }
 }
 
-void CPUMaxMinQuantizer::CompressBucket(unsigned char* input_data,
-                                        float* meta_info_buffer,
-                                        unsigned char* output,
-                                        unsigned char* feedback_data,
-                                        int64_t num_elems, int64_t bucket_no) {
-  float* input = ((float*)input_data) + bucket_no * bucket_size_;
+void CPUMaxMinQuantizer::CompressBucket(
+    unsigned char* input_data, float* meta_info_buffer, unsigned char* output,
+    unsigned char* feedback_data,
+    const CompressionModuleConfig& compression_cfg, int64_t num_elems,
+    int64_t bucket_no) {
+  const int bits = compression_cfg.quantization_bits;
+  const int bucket_size = compression_cfg.bucket_size;
+  float* input = ((float*)input_data) + bucket_no * bucket_size;
   float* feedback = nullptr;
   if (feedback_data)
-    feedback = ((float*)feedback_data) + bucket_no * bucket_size_;
+    feedback = ((float*)feedback_data) + bucket_no * bucket_size;
   // number of bits in char.
   output =
-      output + (bucket_size_ * bucket_no * bits_ + PACK_SIZE - 1) / PACK_SIZE;
+      output + (bucket_size * bucket_no * bits + PACK_SIZE - 1) / PACK_SIZE;
 
   float max = input[0];
   float min = input[0];
@@ -410,12 +504,12 @@ void CPUMaxMinQuantizer::CompressBucket(unsigned char* input_data,
 
   meta_info_buffer[2 * bucket_no] = max;
   meta_info_buffer[2 * bucket_no + 1] = min;
-  int divisor = (1 << bits_) - 1;
+  int divisor = (1 << bits) - 1;
   float unit = (max - min) / divisor;
   std::function<unsigned char(float, float*)> encode =
       std::bind(&CPUMaxMinQuantizer::EncodeValue, this, std::placeholders::_1,
                 std::placeholders::_2, min, unit);
-  PackBucket(input, output, feedback, num_elems, bits_, encode);
+  PackBucket(input, output, feedback, num_elems, bits, encode);
 }
 
 unsigned char CPUMaxMinQuantizer::EncodeValue(float v, float* feedback,
@@ -429,23 +523,24 @@ unsigned char CPUMaxMinQuantizer::EncodeValue(float v, float* feedback,
   return level;
 }
 
-void CPUMaxMinQuantizer::DecompressBucket(unsigned char* input_data,
-                                          float* meta_info_buffer,
-                                          unsigned char* output_data,
-                                          int64_t num_elems, int64_t bucket_no,
-                                          bool add) {
-  float* output = (float*)output_data + bucket_no * bucket_size_;
+void CPUMaxMinQuantizer::DecompressBucket(
+    unsigned char* input_data, float* meta_info_buffer,
+    unsigned char* output_data, const CompressionModuleConfig& compression_cfg,
+    int64_t num_elems, int64_t bucket_no, bool add) {
+  const int bits = compression_cfg.quantization_bits;
+  const int bucket_size = compression_cfg.bucket_size;
+  float* output = (float*)output_data + bucket_no * bucket_size;
   // number of bits in char.
-  int divisor = (1 << bits_) - 1;
+  const int divisor = (1 << bits) - 1;
   float max = meta_info_buffer[2 * bucket_no];
   float min = meta_info_buffer[2 * bucket_no + 1];
   float unit = (max - min) / divisor;
-  input_data = input_data +
-               (bucket_size_ * bucket_no * bits_ + PACK_SIZE - 1) / PACK_SIZE;
+  input_data =
+      input_data + (bucket_size * bucket_no * bits + PACK_SIZE - 1) / PACK_SIZE;
   std::function<float(unsigned char)> decode = std::bind(
       &CPUMaxMinQuantizer::DecodeValue, this, std::placeholders::_1, min, unit);
 
-  UnpackBucket(input_data, output, num_elems, bits_, add, decode);
+  UnpackBucket(input_data, output, num_elems, bits, add, decode);
 }
 
 float CPUMaxMinQuantizer::DecodeValue(unsigned char input, float min,
@@ -458,63 +553,76 @@ float CPUMaxMinQuantizer::DecodeValue(unsigned char input, float min,
 // ================
 Status CPUNormalizedQuantizer::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
-  if (levels_ == nullptr) {
-    int num_levels;
-    levels_ = FillLevels(bits_, num_levels, compression_type_, levels_type_);
+  for (auto& entry : entries) {
+    auto& config = GetModuleConfig(entry.tensor_name);
+    if (bits_to_levels_.find(config.quantization_bits) ==
+        bits_to_levels_.end()) {
+      int num_levels;
+      bits_to_levels_[config.quantization_bits] =
+          FillLevels(config.quantization_bits, num_levels, compression_type_,
+                     levels_type_);
+    }
   }
   return Status::OK();
 }
 
-inline int64_t CPUNormalizedQuantizer::BufferSize(int num_elems,
-                                                  DataType dtype) {
-  int64_t compressed_values_buffer_size = (num_elems * bits_ + 7) / 8;
-  int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
+inline int64_t CPUNormalizedQuantizer::BufferSize(
+    int num_elems, DataType dtype,
+    const CompressionModuleConfig& compression_cfg) {
+  const int bits = compression_cfg.quantization_bits;
+  const int bucket_size = compression_cfg.bucket_size;
+  int64_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
+  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   int64_t meta_buffer_size = get_sizeof(dtype) * num_buckets;
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-int64_t CPUNormalizedQuantizer::Compress(unsigned char* input_data,
-                                         unsigned char* output,
-                                         unsigned char* feedback_data,
-                                         int64_t num_elems, DataType dtype, void* ctx) {
+int64_t CPUNormalizedQuantizer::Compress(
+    unsigned char* input_data, unsigned char* output,
+    unsigned char* feedback_data, int64_t num_elems, DataType dtype,
+    const CompressionModuleConfig& compression_cfg, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
-  int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
+  const int bits = compression_cfg.quantization_bits;
+  const int bucket_size = compression_cfg.bucket_size;
+  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   int64_t meta_buffer_size = sizeof(float) * num_buckets;
-  int64_t compressed_values_buffer_size = (num_elems * bits_ + 7) / 8;
+  int64_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
 
   auto meta_info_buffer = (float*)output;
   output += meta_buffer_size;
   for (int64_t bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
     CompressBucket(
-        input_data, meta_info_buffer, output, feedback_data,
-        std::min((int64_t)bucket_size_, num_elems - bucket_no * bucket_size_),
+        input_data, meta_info_buffer, output, feedback_data, compression_cfg,
+        std::min((int64_t)bucket_size, num_elems - bucket_no * bucket_size),
         bucket_no);
   }
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-void CPUNormalizedQuantizer::Decompress(unsigned char* input_data,
-                                        unsigned char* output,
-                                        int64_t num_elems, DataType dtype,
-                                        bool add, void* ctx) {
+void CPUNormalizedQuantizer::Decompress(
+    unsigned char* input_data, unsigned char* output, int64_t num_elems,
+    DataType dtype, bool add, const CompressionModuleConfig& compression_cfg,
+    void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
-  int64_t num_buckets = (num_elems + bucket_size_ - 1) / bucket_size_;
+  const int bits = compression_cfg.quantization_bits;
+  const int bucket_size = compression_cfg.bucket_size;
+  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   int64_t meta_buffer_size = sizeof(float) * num_buckets;
 
   auto meta_info_buffer = (float*)input_data;
   input_data += meta_buffer_size;
   for (int64_t bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
     DecompressBucket(
-        input_data, meta_info_buffer, output,
-        std::min((int64_t)bucket_size_, num_elems - bucket_no * bucket_size_),
+        input_data, meta_info_buffer, output, compression_cfg,
+        std::min((int64_t)bucket_size, num_elems - bucket_no * bucket_size),
         bucket_no, add);
   }
 }
 
 unsigned char CPUNormalizedQuantizer::EncodeValue(float v, float* feedback,
-                                                  float norm) {
+                                                  float norm, int bits) {
   float d = v;
-  unsigned char num_levels = 1 << (bits_ - 1);
+  unsigned char num_levels = 1 << (bits - 1);
   char sign = (d < -EPS);
   d /= norm;
   if (levels_type_ == LevelsType::Wide) {
@@ -523,13 +631,14 @@ unsigned char CPUNormalizedQuantizer::EncodeValue(float v, float* feedback,
   } else {
     d = fabs(d);
   }
+  float* levels = bits_to_levels_[bits];
   float rand = randomizer.GetRand();
   unsigned char level_idx = 0;
   // levels are going 1.0 q_n q_{n-1} ... 0.0(or -1.0)
   while (level_idx + 1 < num_levels) {
-    if (d - levels_[level_idx + 1] > EPS) {
-      if (d + (levels_[level_idx] - levels_[level_idx + 1]) * rand -
-              levels_[level_idx] <
+    if (d - levels[level_idx + 1] > EPS) {
+      if (d + (levels[level_idx] - levels[level_idx + 1]) * rand -
+              levels[level_idx] <
           -EPS) {
         level_idx++;
       }
@@ -541,42 +650,48 @@ unsigned char CPUNormalizedQuantizer::EncodeValue(float v, float* feedback,
   // update error feedback
   if (feedback) {
     float recovered_v = norm * (sign ? -1.0 : 1.0);
-    if (bits_ > 1)
-      recovered_v *= levels_[level_idx];
+    if (bits > 1)
+      recovered_v *= levels[level_idx];
     *feedback = v - recovered_v;
   }
-  level_idx |= (sign << (bits_ - 1));
+  level_idx |= (sign << (bits - 1));
   return level_idx;
 }
 
-float CPUNormalizedQuantizer::DecodeValue(unsigned char input, float norm) {
+float CPUNormalizedQuantizer::DecodeValue(unsigned char input, float norm,
+                                          int bits) {
   unsigned int num_levels;
   char sign;
-  if (levels_type_ == LevelsType::Wide and bits_ > 1) {
-    num_levels = 1 << bits_;
+  float* levels = bits_to_levels_[bits];
+  if (levels_type_ == LevelsType::Wide and bits > 1) {
+    num_levels = 1 << bits;
     sign = 1;
   } else {
-    num_levels = 1 << (bits_ - 1);
+    num_levels = 1 << (bits - 1);
     sign = (input & num_levels) ? -1 : 1;
     input &= num_levels - 1;
   }
   float decode_value = norm * sign;
 
-  if (bits_ > 1) {
-    decode_value *= levels_[input];
+  if (bits > 1) {
+    decode_value *= levels[input];
   }
   return decode_value;
 }
 
 void CPUNormalizedQuantizer::CompressBucket(
     unsigned char* input_data, float* meta_info_buffer, unsigned char* output,
-    unsigned char* feedback_data, int64_t num_elems, int64_t bucket_no) {
-  float* input = ((float*)input_data) + bucket_size_ * bucket_no;
+    unsigned char* feedback_data,
+    const CompressionModuleConfig& compression_cfg, int64_t num_elems,
+    int64_t bucket_no) {
+  const int bits = compression_cfg.quantization_bits;
+  const int bucket_size = compression_cfg.bucket_size;
+  float* input = ((float*)input_data) + bucket_size * bucket_no;
   float* feedback = nullptr;
   if (feedback_data)
-    feedback = ((float*)feedback_data) + bucket_no * bucket_size_;
+    feedback = ((float*)feedback_data) + bucket_no * bucket_size;
   output =
-      output + (bucket_size_ * bucket_no * bits_ + PACK_SIZE - 1) / PACK_SIZE;
+      output + (bucket_size * bucket_no * bits + PACK_SIZE - 1) / PACK_SIZE;
 
   float norm = 0;
   if (norm_type_ == NormType::Linf) {
@@ -595,23 +710,25 @@ void CPUNormalizedQuantizer::CompressBucket(
 
   std::function<unsigned char(float, float*)> encode =
       std::bind(&CPUNormalizedQuantizer::EncodeValue, this,
-                std::placeholders::_1, std::placeholders::_2, norm);
-  PackBucket(input, output, feedback, num_elems, bits_, encode);
+                std::placeholders::_1, std::placeholders::_2, norm, bits);
+  PackBucket(input, output, feedback, num_elems, bits, encode);
 }
 
-void CPUNormalizedQuantizer::DecompressBucket(unsigned char* input_data,
-                                              float* meta_info_buffer,
-                                              unsigned char* output_data,
-                                              int64_t num_elems,
-                                              int64_t bucket_no, bool add) {
-  float* output = (float*)output_data + bucket_no * bucket_size_;
+void CPUNormalizedQuantizer::DecompressBucket(
+    unsigned char* input_data, float* meta_info_buffer,
+    unsigned char* output_data, const CompressionModuleConfig& compression_cfg,
+    int64_t num_elems, int64_t bucket_no, bool add) {
+  const int bits = compression_cfg.quantization_bits;
+  const int bucket_size = compression_cfg.bucket_size;
+  float* output = (float*)output_data + bucket_no * bucket_size;
   // number of bits in char.
-  float norm = meta_info_buffer[bucket_no];
-  input_data = input_data +
-               (bucket_size_ * bucket_no * bits_ + PACK_SIZE - 1) / PACK_SIZE;
-  std::function<float(unsigned char)> decode = std::bind(
-      &CPUNormalizedQuantizer::DecodeValue, this, std::placeholders::_1, norm);
-  UnpackBucket(input_data, output, num_elems, bits_, add, decode);
+  const float norm = meta_info_buffer[bucket_no];
+  input_data =
+      input_data + (bucket_size * bucket_no * bits + PACK_SIZE - 1) / PACK_SIZE;
+  std::function<float(unsigned char)> decode =
+      std::bind(&CPUNormalizedQuantizer::DecodeValue, this,
+                std::placeholders::_1, norm, bits);
+  UnpackBucket(input_data, output, num_elems, bits, add, decode);
 }
 
 // Utils
@@ -653,6 +770,132 @@ void UnpackBucket(unsigned char* input, float* output, int num_elems, int bits,
         output[i * PACK_SIZE + j] = decode(encoded_value);
     }
   }
+}
+
+struct CompressConfigParser {
+  void ParseYaml(FILE* fh, Compressor::map_compresion_configs& modules_configs,
+                 Compressor::set_ignore_modules& ignore_modules) {
+    yaml_parser_t parser;
+    yaml_event_t event;
+    if (!yaml_parser_initialize(&parser)) {
+      LOG(WARNING) << "Failed to initialize yaml parser";
+      return;
+    }
+    yaml_parser_set_input_file(&parser, fh);
+    do {
+      if (!yaml_parser_parse(&parser, &event)) {
+        LOG(ERROR) << "Compressor: yaml Parser error " << parser.error;
+        exit(1);
+      }
+      if (event.type == YAML_SCALAR_EVENT) {
+        auto value =
+            std::string(reinterpret_cast<char*>(event.data.scalar.value));
+        if (value == "ignore_modules") {
+          ParseIgnoreModules(&parser, &event, ignore_modules);
+        } else if (value == "modules") {
+          ParseModules(&parser, &event, modules_configs);
+        }
+      }
+    } while (event.type != YAML_STREAM_END_EVENT);
+    yaml_event_delete(&event);
+    yaml_parser_delete(&parser);
+  }
+
+private:
+  void ParseIgnoreModules(yaml_parser_t* parser_p, yaml_event_t* event_p,
+                          Compressor::set_ignore_modules& modules) {
+    do {
+      if (!yaml_parser_parse(parser_p, event_p)) {
+        LOG(ERROR) << "Compressor: yaml parsing error " << parser_p->error;
+        exit(1);
+      }
+      switch (event_p->type) {
+      case YAML_SEQUENCE_START_EVENT:
+      case YAML_SEQUENCE_END_EVENT:
+        break;
+      case YAML_SCALAR_EVENT: {
+        std::string value(reinterpret_cast<char*>(event_p->data.scalar.value));
+        modules.insert(value);
+        break;
+      }
+      default:
+        LOG(ERROR) << "Compressor: yaml parsing unexpected token";
+        break;
+      }
+    } while (event_p->type != YAML_SEQUENCE_END_EVENT);
+  }
+  void ParseModules(yaml_parser_t* parser_p, yaml_event_t* event_p,
+                    Compressor::map_compresion_configs& modules) {
+    CompressionModuleConfig config;
+    std::string name;
+    do {
+      if (!yaml_parser_parse(parser_p, event_p)) {
+        LOG(ERROR) << "Compressor: yaml parsing error " << parser_p->error;
+        exit(1);
+      }
+      switch (event_p->type) {
+      case YAML_SEQUENCE_START_EVENT:
+      case YAML_SEQUENCE_END_EVENT:
+        break;
+      case YAML_MAPPING_START_EVENT:
+        config = {};
+        name = "";
+        break;
+      case YAML_MAPPING_END_EVENT:
+        assert(name != "");
+        modules.emplace(name, config);
+        break;
+      case YAML_SCALAR_EVENT: {
+        std::string value(reinterpret_cast<char*>(event_p->data.scalar.value));
+        if (value == "name") {
+          ParseString(parser_p, event_p, name);
+        } else if (value == "quantization_bits") {
+          int value;
+          ParseInt(parser_p, event_p, value);
+          config.quantization_bits = value;
+        } else if (value == "bucket_size") {
+          int value;
+          ParseInt(parser_p, event_p, value);
+          config.bucket_size = value;
+        }
+        break;
+      }
+      default:
+        LOG(ERROR) << "Compressor: yaml parsing unexpected token";
+        break;
+      }
+    } while (event_p->type != YAML_SEQUENCE_END_EVENT);
+  }
+
+  void ParseString(yaml_parser_t* parser_p, yaml_event_t* event_p,
+                   std::string& value) {
+    if (!yaml_parser_parse(parser_p, event_p)) {
+      LOG(ERROR) << "Compressor: yaml Parsing error " << parser_p->error;
+      exit(1);
+    }
+    assert(event_p->type == YAML_SCALAR_EVENT);
+    value = std::string(reinterpret_cast<char*>(event_p->data.scalar.value));
+  }
+
+  void ParseInt(yaml_parser_t* parser_p, yaml_event_t* event_p, int& value) {
+    if (!yaml_parser_parse(parser_p, event_p)) {
+      LOG(ERROR) << "Compressor: Parsing Int error " << parser_p->error;
+      exit(1);
+    }
+    assert(event_p->type == YAML_SCALAR_EVENT);
+    value = std::atoi(reinterpret_cast<char*>(event_p->data.scalar.value));
+  }
+};
+
+void Compressor::ParseYaml(const char* file) {
+  FILE* fh = fopen(file, "r");
+  if (fh == nullptr) {
+    LOG(WARNING) << "Compression config file not found";
+    return;
+  }
+  CompressConfigParser parser;
+  parser.ParseYaml(fh, modules_configs, ignore_modules);
+  fclose(fh);
 }
 
 } // namespace common

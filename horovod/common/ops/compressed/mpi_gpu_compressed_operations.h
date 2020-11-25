@@ -22,10 +22,11 @@ public:
                              const Response& response) const override;
   bool EnabledName(const std::string& name) const override;
 protected:
-  MPIReducer *mpiReducer;
+  MPIReducer *reducer_;
+  Compressor *compressor_;
 };
 
-void SetQuantizationLevels(float* levels);
+void SetQuantizationLevels(float* levels, int bits);
 
 } // common
 } // horovod

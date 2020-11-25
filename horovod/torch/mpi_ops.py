@@ -216,7 +216,7 @@ def allreduce(tensor, average=None, name=None, compression=Compression.none, op=
         A tensor of the same shape and type as `tensor`, averaged or summed across all
         processes.
     """
-    tensor_compressed, ctx = compression.compress(tensor, 0)
+    tensor_compressed, ctx = compression.compress(tensor)
     summed_tensor_compressed = HorovodAllreduce.apply(tensor_compressed, average, name, op,
                                                       prescale_factor, postscale_factor)
     return compression.decompress(summed_tensor_compressed, ctx)
