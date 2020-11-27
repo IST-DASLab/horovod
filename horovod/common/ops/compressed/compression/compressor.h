@@ -13,6 +13,7 @@ const int COMPRESSION_BUCKET_SIZE = 512;
 struct CompressionModuleConfig {
   int quantization_bits;
   int bucket_size;
+  bool skip_incomplete_buckets;
 };
 
 class Compressor {

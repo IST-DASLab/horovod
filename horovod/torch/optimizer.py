@@ -74,6 +74,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
         self._requires_update = set()
         self._synchronized = False
         self._should_synchronize = True
+        self._step = 0
         if size() > 1 or os.environ.get('HOROVOD_ELASTIC') == '1':
             self._register_hooks()
 
@@ -114,7 +115,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
     def _allreduce_grad_async(self, p):
         name = self._parameter_names.get(p)
         tensor = p.grad
-        tensor_compressed, ctx = self._compression.compress(p)
+        tensor_compressed, ctx = self._compression.compress(p, self._step)
 
         if self.op == Average:
            # Split average operation across pre/postscale factors
@@ -197,6 +198,7 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                               "optimizer.synchronize() in your code.")
             self.synchronize()
         self._synchronized = False
+        self._step += 1
         return super(self.__class__, self).step(closure)
 
     def zero_grad(self):
@@ -311,7 +313,7 @@ class _DistributedAdasumOptimizer(torch.optim.Optimizer):
         p.data.sub_(start)
 
         # allreduce as before
-        tensor_compressed, ctx = self._compression.compress(p)
+        tensor_compressed, ctx = self._compression.compress(p, self._step)
         handle = allreduce_async_(tensor_compressed.data, name=name, op=Adasum)
 
         # reset stashed parameters

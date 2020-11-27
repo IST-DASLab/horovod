@@ -498,6 +498,8 @@ def parse_args():
                                         help='Fake compression in nccl')
     group_grad_compression.add_argument('--compression-error-feedback', action=make_override_true_action(override_args),
                                         help='Enable error feedback for gradient compression.')
+    group_grad_compression.add_argument('--compression-skip-incomplete-buckets', action=make_override_true_action(override_args),
+                                        help='Enable skipping incomplete buckets for gradient compression.')
     group_timeline.add_argument('--compression-config-filename', action=make_override_action(override_args),
                                 help='JSON file containing timeline of Horovod events used for debugging '
                                      'performance. If this is provided, timeline events will be recorded, '

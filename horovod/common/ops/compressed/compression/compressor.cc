@@ -31,6 +31,9 @@ Compressor::Compressor(HorovodGlobalState* global_state)
     : global_state_(global_state) {
   default_config.bucket_size = GetIntEnvOrDefault(
       HOROVOD_COMPRESSION_BUCKET_SIZE, COMPRESSION_BUCKET_SIZE);
+  default_config.skip_incomplete_buckets = false;
+  SetBoolFromEnv(HOROVOD_COMPRESSION_SKIP_INCOMPLETE_BUCKETS,
+                 default_config.skip_incomplete_buckets, true);
   const char* config_filename = std::getenv(HOROVOD_COMPRESSION_CONFIG_FILE);
   if (config_filename != nullptr) {
     ParseYaml(config_filename);
@@ -47,16 +50,17 @@ CompressionModuleConfig& Compressor::GetModuleConfig(const std::string& name) {
       config.bucket_size = (config.bucket_size > 0)
                                ? config.bucket_size
                                : default_config.bucket_size;
+      config.skip_incomplete_buckets = default_config.skip_incomplete_buckets;
       return config;
     }
   }
   return default_config;
 }
 
-void Compressor::GetSizesAndOffsets(int num_elements, int world_size,
-                                    const std::vector<TensorTableEntry>& entries,
-                                    std::vector<int>& offsets,
-                                    std::vector<int>& sizes) {
+void Compressor::GetSizesAndOffsets(
+    int num_elements, int world_size,
+    const std::vector<TensorTableEntry>& entries, std::vector<int>& offsets,
+    std::vector<int>& sizes) {
   int residue = num_elements % world_size;
   int num_elems_per_node = num_elements / world_size;
   int offset = 0;
@@ -391,14 +395,15 @@ void Quantizer::GetSizesAndOffsets(int num_elements, int world_size,
                                    std::vector<int>& offsets,
                                    std::vector<int>& sizes) {
   if (default_config.quantization_bits == 32) {
-    Compressor::GetSizesAndOffsets(num_elements, world_size, entries, offsets, sizes);
+    Compressor::GetSizesAndOffsets(num_elements, world_size, entries, offsets,
+                                   sizes);
     return;
   }
   int offset = 0;
   int num_per_node;
   auto it = entries.begin();
   int entry_offset = 0;
-  int n_elem = std::min((int) it->tensor->shape().num_elements(), num_elements);
+  int n_elem = std::min((int)it->tensor->shape().num_elements(), num_elements);
   int cur_size = 0;
   for (int rank = 0; rank < world_size; rank++) {
     num_per_node = num_elements / (world_size - rank);
@@ -409,9 +414,11 @@ void Quantizer::GetSizesAndOffsets(int num_elements, int world_size,
         it++;
         if (it == entries.end())
           break;
-        n_elem = std::min((int) it->tensor->shape().num_elements(), num_elements);
+        n_elem =
+            std::min((int)it->tensor->shape().num_elements(), num_elements);
       } else {
-        int aligned = std::min((int) round_to(num_per_node - cur_size, 4), n_elem);
+        int aligned =
+            std::min((int)round_to(num_per_node - cur_size, 4), n_elem);
         cur_size += aligned;
         n_elem -= aligned;
       }

@@ -616,7 +616,7 @@ void CUDA_quantize_maxmin(unsigned char* input_data, unsigned char* output_data,
   int num_blocks =
       umin((num_elems + bucket_size - 1) / bucket_size, MAX_NUMBER_OF_BLOCKS);
   int num_threads = umin(THREADS_PER_BLOCK_COMPRESS, bucket_size);
-  int shared_memory_block_size = 2 * num_threads * sizeof(T);
+  int shared_memory_block_size = 2 * MAX_THREADS_PER_BLOCK * sizeof(T);
   QUANTIZE1<T, CompressFunc::MaxMin, NormType::Linf>(
       input_data, output_data, feedback_data, num_elems, bits, bucket_size,
       states, stream, nullptr, num_blocks, num_threads,
@@ -632,7 +632,7 @@ void CUDA_quantize_Norm(unsigned char* input_data, unsigned char* output_data,
   int num_blocks =
       umin((num_elems + bucket_size - 1) / bucket_size, MAX_NUMBER_OF_BLOCKS);
   int num_threads = umin(THREADS_PER_BLOCK_COMPRESS, bucket_size);
-  int shared_memory_block_size = num_threads * sizeof(T);
+  int shared_memory_block_size = MAX_THREADS_PER_BLOCK * sizeof(T);
   if (levels_type == LevelsType::Pos) {
     const CompressFunc func = CompressFunc::NormPos;
     if (norm_type == NormType::Linf) {

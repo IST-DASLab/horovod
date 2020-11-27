@@ -63,6 +63,7 @@ HOROVOD_NCCL_FAKE_COMPRESSION = "HOROVOD_NCCL_FAKE_COMPRESSION"
 HOROVOD_COMPRESSION_LEVELS_TYPE = "HOROVOD_COMPRESSION_LEVELS_TYPE"
 HOROVOD_COMPRESSION_ERROR_FEEDBACK = "HOROVOD_COMPRESSION_ERROR_FEEDBACK"
 HOROVOD_COMPRESSION_CONFIG_FILE = "HOROVOD_COMPRESSION_CONFIG_FILE"
+HOROVOD_COMPRESSION_SKIP_INCOMPLETE_BUCKETS = "HOROVOD_COMPRESSION_SKIP_INCOMPLETE_BUCKETS"
 
 class CommunicatorType(Enum):
     MPI = 0
@@ -318,5 +319,6 @@ def set_env_from_args(env, args):
     _add_arg_to_env(env, HOROVOD_COMPRESSION_NORM_TYPE, args.compression_norm_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_NCCL_FAKE_COMPRESSION, args.compression_nccl_fake_ratio)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_ERROR_FEEDBACK, args.compression_error_feedback, identity)
+    _add_arg_to_env(env, HOROVOD_COMPRESSION_SKIP_INCOMPLETE_BUCKETS, args.compression_skip_incomplete_buckets, identity)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_CONFIG_FILE, args.compression_config_filename)
     return env

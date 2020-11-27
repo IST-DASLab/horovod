@@ -68,9 +68,9 @@ float* FillLevels(int bits, int& size, CompressionType compression_type,
     if (levels_type == LevelsType::Wide) {
       init_num_levels = 1 << bits;
       host_levels = new float[init_num_levels];
-      host_levels[0] = 1.0;
-      host_levels[init_num_levels - 1] = -1.0;
-      float level_v = QUANTIZE_MULTIPLIER;
+      host_levels[0] = QUANTIZE_MULTIPLIER;
+      host_levels[init_num_levels - 1] = -QUANTIZE_MULTIPLIER;
+      float level_v = QUANTIZE_MULTIPLIER * QUANTIZE_MULTIPLIER;
       for (int i = 1; i <= (init_num_levels - 1) / 2; i++) {
         host_levels[i] = level_v;
         host_levels[init_num_levels - 1 - i] = -level_v;
@@ -79,8 +79,8 @@ float* FillLevels(int bits, int& size, CompressionType compression_type,
     } else {
       init_num_levels = 1 << (bits - 1);
       host_levels = new float[init_num_levels];
-      host_levels[0] = 1.0;
-      float level_v = QUANTIZE_MULTIPLIER;
+      host_levels[0] = QUANTIZE_MULTIPLIER;
+      float level_v = QUANTIZE_MULTIPLIER * QUANTIZE_MULTIPLIER;
       for (int i = 1; i <= init_num_levels - 1; i++) {
         host_levels[i] = level_v;
         level_v *= QUANTIZE_MULTIPLIER;

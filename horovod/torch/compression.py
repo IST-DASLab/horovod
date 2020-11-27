@@ -32,9 +32,9 @@ class Compressor(object):
 
 class NoneCompressor(Compressor):
     """Default no-op compression."""
-    def compress(self, p, step=-1):
+    def compress(self, p, step=0):
         """Returns the tensor unmodified."""
-        if p.requires_grad and step != -1:
+        if p.requires_grad:
             return p.grad, None
         else:
             return p, None
