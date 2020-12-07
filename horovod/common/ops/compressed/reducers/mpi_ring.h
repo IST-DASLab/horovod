@@ -17,6 +17,7 @@ public:
 
   Status Init(const std::vector<TensorTableEntry>& entries,
               MPI_Comm comm) override;
+  size_t GetRequiredFreeSize() override;
 };
 
 } // namespace common

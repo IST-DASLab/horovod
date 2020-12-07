@@ -65,6 +65,7 @@ public:
                   void* ctx) override;
   int64_t BufferSize(int num_elems, DataType dtype,
                      const CompressionModuleConfig& compression_cfg) final;
+  virtual size_t GetRequiredFreeSize() final;
   void Finalize();
 
 private:
@@ -97,7 +98,7 @@ public:
                   int64_t num_elems, DataType dtype, bool add,
                   const CompressionModuleConfig& compression_cfg,
                   void* ctx) override;
-
+  virtual size_t GetRequiredFreeSize() final;
 protected:
   std::map<int, Half*> bits_to_levels_fp16_;
   std::unique_ptr<GPUCompressionContext> gpu_compression_context_;

@@ -14,6 +14,13 @@ MPI_Allreduce_AllGather::MPI_Allreduce_AllGather(
   }
 }
 
+size_t MPI_Allreduce_AllGather::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  size_t chunk_size =
+      global_state_->parameter_manager.TensorFusionThresholdBytes();
+  return chunk_size + chunk_size * (world_size - 1) + chunk_size;
+}
+
 Status
 MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries,
                               MPI_Comm comm) {
@@ -50,6 +57,7 @@ MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries,
     return status;
   }
   status = error_feedback_.Init(entries);
+  initialized_ = true;
   return status;
 }
 

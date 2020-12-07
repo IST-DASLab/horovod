@@ -169,9 +169,9 @@ inline __device__ T DecodeValue(unsigned char input, unsigned char* meta_info,
   }
 }
 
-template <typename T, CompressFunc FUNC, NormType NORM>
-__device__ void find_meta_parallel(T* input, unsigned char* meta, int num_elems,
-                                   int bits) {
+template <typename T, CompressFunc FUNC, NormType NORM, int BITS>
+__device__ void find_meta_parallel(T* input, unsigned char* meta,
+                                   int num_elems) {
   unsigned int tid = threadIdx.x;
   unsigned int block_size = blockDim.x;
   T* meta_buf = (T*)meta;
@@ -228,7 +228,7 @@ __device__ void find_meta_parallel(T* input, unsigned char* meta, int num_elems,
   }
   if (tid == 0) {
     if (is_maxmin) {
-      unsigned int divisor = (1 << bits) - 1;
+      const unsigned int divisor = (1 << BITS) - 1;
       meta_buf[0] = div_int(sub(meta_buf[0], meta_buf[1]), divisor);
     } else {
       if (lt(meta_buf[0], (T)EPS))
@@ -242,7 +242,7 @@ __device__ void find_meta_parallel(T* input, unsigned char* meta, int num_elems,
 
 template <int BITS>
 inline __device__ void pack_value(const int64_t value, unsigned char* output,
-                                    unsigned int shift = 0) {
+                                  unsigned int shift = 0) {
 #pragma unroll BITS
   for (unsigned int j = 0; j < BITS; j++) {
     output[j] = value >> (PACK_SIZE * j) & 0xFF;
@@ -250,9 +250,8 @@ inline __device__ void pack_value(const int64_t value, unsigned char* output,
 }
 
 template <>
-inline __device__ void pack_value<2>(const int64_t value,
-                                       unsigned char* output,
-                                       unsigned int shift) {
+inline __device__ void pack_value<2>(const int64_t value, unsigned char* output,
+                                     unsigned int shift) {
   U2 output2;
 #pragma unroll 2
   for (unsigned int j = 0; j < 2; j++) {
@@ -263,9 +262,8 @@ inline __device__ void pack_value<2>(const int64_t value,
 }
 
 template <>
-inline __device__ void pack_value<3>(const int64_t value,
-                                       unsigned char* output,
-                                       unsigned int shift) {
+inline __device__ void pack_value<3>(const int64_t value, unsigned char* output,
+                                     unsigned int shift) {
   U3 output3;
 #pragma unroll 3
   for (unsigned int j = 0; j < 3; j++) {
@@ -276,9 +274,8 @@ inline __device__ void pack_value<3>(const int64_t value,
 }
 
 template <>
-inline __device__ void pack_value<4>(const int64_t value,
-                                       unsigned char* output,
-                                       unsigned int shift) {
+inline __device__ void pack_value<4>(const int64_t value, unsigned char* output,
+                                     unsigned int shift) {
   U4 output4;
 #pragma unroll 4
   for (unsigned int j = 0; j < 4; j++) {
@@ -289,17 +286,15 @@ inline __device__ void pack_value<4>(const int64_t value,
 }
 
 template <>
-inline __device__ void pack_value<6>(const int64_t value,
-                                       unsigned char* output,
-                                       unsigned int shift) {
+inline __device__ void pack_value<6>(const int64_t value, unsigned char* output,
+                                     unsigned int shift) {
   pack_value<3>(value, output, 0);
   pack_value<3>(value, output + 3, 3);
 }
 
 template <>
-inline __device__ void pack_value<8>(const int64_t value,
-                                       unsigned char* output,
-                                       unsigned int shift) {
+inline __device__ void pack_value<8>(const int64_t value, unsigned char* output,
+                                     unsigned int shift) {
   pack_value<4>(value, output, 0);
   pack_value<4>(value, output + 4, 4);
 }
@@ -390,10 +385,9 @@ __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
   T* input = (T*)input_data;
   for (int bucket_id = bid; bucket_id < num_buckets; bucket_id += num_blocks) {
     cur_bucket_size = umin(bucket_size, num_elems - bucket_id * bucket_size);
-    find_meta_parallel<T, FUNC, NORM>(
+    find_meta_parallel<T, FUNC, NORM, BITS>(
         input + bucket_size * bucket_id,
-        (unsigned char*)(meta + META_MULTIPLIER * bucket_id), cur_bucket_size,
-        BITS);
+        (unsigned char*)(meta + META_MULTIPLIER * bucket_id), cur_bucket_size);
   }
   CurandState local_state = states[tid];
   for (int bucket_id = bid; bucket_id < num_buckets; bucket_id += num_blocks) {
@@ -407,14 +401,16 @@ __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
 }
 
 template <int BITS>
-inline __device__ void unpack_value(unsigned char* input, uint64_t& value, unsigned shift = 0) {
+inline __device__ void unpack_value(unsigned char* input, uint64_t& value,
+                                    unsigned shift = 0) {
   for (unsigned int j = 0; j < BITS; j++) {
     value |= ((uint64_t)input[j]) << (j * PACK_SIZE);
   }
 }
 
 template <>
-inline __device__ void unpack_value<2>(unsigned char* input, uint64_t& value, unsigned int shift) {
+inline __device__ void unpack_value<2>(unsigned char* input, uint64_t& value,
+                                       unsigned int shift) {
   U2 input2;
   input2.vec = reinterpret_cast<uchar2*>(input)[0];
 #pragma unroll 3
@@ -424,7 +420,8 @@ inline __device__ void unpack_value<2>(unsigned char* input, uint64_t& value, un
 }
 
 template <>
-inline __device__ void unpack_value<3>(unsigned char* input, uint64_t& value, unsigned int shift) {
+inline __device__ void unpack_value<3>(unsigned char* input, uint64_t& value,
+                                       unsigned int shift) {
   U3 input3;
   input3.vec = reinterpret_cast<uchar3*>(input)[0];
 #pragma unroll 3
@@ -434,7 +431,8 @@ inline __device__ void unpack_value<3>(unsigned char* input, uint64_t& value, un
 }
 
 template <>
-inline __device__ void unpack_value<4>(unsigned char* input, uint64_t& value, unsigned int shift) {
+inline __device__ void unpack_value<4>(unsigned char* input, uint64_t& value,
+                                       unsigned int shift) {
   U4 input4;
   input4.vec = reinterpret_cast<uchar4*>(input)[0];
 #pragma unroll 4
@@ -444,13 +442,15 @@ inline __device__ void unpack_value<4>(unsigned char* input, uint64_t& value, un
 }
 
 template <>
-inline __device__ void unpack_value<6>(unsigned char* input, uint64_t& value, unsigned int shift) {
+inline __device__ void unpack_value<6>(unsigned char* input, uint64_t& value,
+                                       unsigned int shift) {
   unpack_value<3>(input, value, 0);
   unpack_value<3>(input + 3, value, 3);
 }
 
 template <>
-inline __device__ void unpack_value<8>(unsigned char* input, uint64_t& value, unsigned int shift) {
+inline __device__ void unpack_value<8>(unsigned char* input, uint64_t& value,
+                                       unsigned int shift) {
   unpack_value<4>(input, value, 0);
   unpack_value<4>(input + 4, value, 4);
 }
@@ -714,8 +714,8 @@ void CUDA_dequantize_maxmin(unsigned char* input_data,
   unsigned char* meta_info = input_data;
   int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   unsigned char* input = input_data + 2 * sizeof(T) * num_buckets;
-  int num_blocks = BLOCKS_PER_GRID(num_elems / PACK_SIZE);
   int num_threads = THREADS_PER_BLOCK_DECOMPRESS;
+  int num_blocks = BLOCKS_PER_GRID(num_elems / PACK_SIZE, num_threads);
   DEQUANTIZE<T, CompressFunc::MaxMin, ADD>(input, meta_info, output, num_elems,
                                            bucket_size, bits, stream, NULL,
                                            num_blocks, num_threads);
@@ -729,8 +729,8 @@ void CUDA_dequantize_Norm(unsigned char* input_data, unsigned char* output_data,
   unsigned char* meta_info = input_data;
   int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   unsigned char* input = input_data + sizeof(T) * num_buckets;
-  int num_blocks = BLOCKS_PER_GRID(num_elems);
   int num_threads = THREADS_PER_BLOCK_DECOMPRESS;
+  int num_blocks = BLOCKS_PER_GRID(num_elems, num_threads);
   if (levels_type == LevelsType::Wide) {
     DEQUANTIZE<T, CompressFunc::NormWide, ADD>(
         input, meta_info, output, num_elems, bucket_size, bits, stream,

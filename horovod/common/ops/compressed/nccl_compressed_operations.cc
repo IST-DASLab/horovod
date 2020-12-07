@@ -135,6 +135,15 @@ bool NCCL_CompressedAllreduce::Enabled(
     const ParameterManager& param_manager,
     const std::vector<TensorTableEntry>& entries,
     const Response& response) const {
+  size_t free = 0, total;
+  cuMemGetInfo(&free, &total);
+  size_t need_free = (reducer_ != nullptr and !reducer_->isInitialized())
+                     ? reducer_->GetRequiredFreeSize()
+                     : 0;
+  need_free += (compressor_ != nullptr and !compressor_->isInitialized())
+               ? compressor_->GetRequiredFreeSize()
+               : 0;
+  int result = 1;
   if (reducer_ == nullptr ||
       NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *
               sizeof(float) <
@@ -142,7 +151,15 @@ bool NCCL_CompressedAllreduce::Enabled(
       !EnabledName(entries[0].tensor_name) ||
       !(entries[0].tensor->dtype() == HOROVOD_FLOAT32 ||
         entries[0].tensor->dtype() == HOROVOD_FLOAT16) ||
-      entries[0].device == CPU_DEVICE_ID) {
+      entries[0].device == CPU_DEVICE_ID || need_free > free) {
+    result = 0;
+  }
+  MPI_Allreduce((void*)&result, (void*)&result, 1, MPI_INT, MPI_SUM,
+                MPI_COMM_WORLD);
+  if (result < global_state_->controller->GetSize()) {
+    if (need_free > free) {
+      LOG(DEBUG) << "Switch to nccl due to lack of memory";
+    }
     return false;
   }
   return GPUAllreduce::Enabled(param_manager, entries, response);

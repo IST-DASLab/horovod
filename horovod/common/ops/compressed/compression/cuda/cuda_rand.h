@@ -83,12 +83,12 @@ __device__ float GetRand(CurandState* state_p) {
 
 void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
                       cudaStream_t stream) {
-  _init_curand<<<BLOCKS_PER_GRID(num_elems), MAX_THREADS_PER_BLOCK, 0,
+  _init_curand<<<BLOCKS_PER_GRID(num_elems, THREADS_PER_BLOCK_COMPRESS), THREADS_PER_BLOCK_COMPRESS, 0,
                  stream>>>(seed, states);
 }
 
 int CUDA_get_curand_array_size(int num_elems) {
-  return BLOCKS_PER_GRID(num_elems) * MAX_THREADS_PER_BLOCK *
+  return BLOCKS_PER_GRID(num_elems, THREADS_PER_BLOCK_COMPRESS) * THREADS_PER_BLOCK_COMPRESS *
          sizeof(CurandState);
 }
 

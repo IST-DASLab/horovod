@@ -167,6 +167,7 @@ macro(ADD_CUDA)
     find_package(CUDA REQUIRED)
     include_directories(SYSTEM ${CUDA_INCLUDE_DIRS})
     list(APPEND LINKER_LIBS ${CUDA_LIBRARIES})
+    list(APPEND LINKER_LIBS cuda)
     list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/cuda_operations.cc"
                         "${PROJECT_SOURCE_DIR}/horovod/common/ops/gpu_operations.cc")
     # CUDA + MPI

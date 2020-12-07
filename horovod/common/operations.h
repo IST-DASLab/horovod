@@ -109,9 +109,10 @@ int horovod_reduce_op_sum();
 // C interface to return value of the ReduceOp::ADASUM enum field.
 int horovod_reduce_op_adasum();
 
+#ifdef GRAD_COMPRESSION
 // C interface to set quantization levels.
 void horovod_set_quantization_levels(float *levels, int bits);
-
+#endif
 }
 
 Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,

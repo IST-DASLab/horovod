@@ -15,6 +15,12 @@ MPI_Allreduce_Ring::MPI_Allreduce_Ring(MPIContext* mpi_context,
   }
 }
 
+size_t MPI_Allreduce_Ring::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  size_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
+  return chunk_size * world_size + chunk_size + chunk_size;
+}
+
 Status MPI_Allreduce_Ring::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries,
     MPI_Comm comm) {
@@ -52,6 +58,7 @@ Status MPI_Allreduce_Ring::Init(
   if (!status.ok()) {
     return status;
   }
+  initialized_ = true;
   return Status::OK();
 }
 

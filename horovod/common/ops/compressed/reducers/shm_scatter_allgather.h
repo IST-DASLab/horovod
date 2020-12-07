@@ -2,7 +2,7 @@
 #define HOROVOD_SHM_SCATTER_ALLGATHER_H
 #include "reducer.h"
 
-namespace horovod{
+namespace horovod {
 namespace common {
 
 class SHM_Allreduce_ScatterReduceAllgather : public SHMReducer {
@@ -17,7 +17,9 @@ public:
                            std::vector<TensorTableEntry>& entries,
                            int64_t global_offset) override;
 
-  Status Init(const std::vector<TensorTableEntry>& entries, MPI_Comm comm) override;
+  Status Init(const std::vector<TensorTableEntry>& entries,
+              MPI_Comm comm) override;
+  size_t GetRequiredFreeSize() override;
 private:
   std::vector<cudaStream_t> streams_;
   std::vector<cudaEvent_t> events_;
@@ -25,6 +27,5 @@ private:
 
 } // namespace common
 } // namespace horovod
-
 
 #endif // HOROVOD_SHM_SCATTER_ALLGATHER_H

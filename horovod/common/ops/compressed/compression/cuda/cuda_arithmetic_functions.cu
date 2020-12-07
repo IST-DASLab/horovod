@@ -26,8 +26,8 @@ __global__ void _add<__half>(int64_t n, const __half* x, const __half* y,
 
 template <typename T>
 void CUDA_add(int64_t n, const T* x, T* y, T* sum, cudaStream_t stream) {
-  int blocks = BLOCKS_PER_GRID(n);
   int num_threads = MAX_THREADS_PER_BLOCK;
+  int blocks = BLOCKS_PER_GRID(n, num_threads);
   _add<T><<<blocks, num_threads, 0, stream>>>(n, x, y, sum);
   CUDA_CHECK(cudaGetLastError());
 }

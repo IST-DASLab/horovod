@@ -15,14 +15,19 @@ NCCL_Allreduce_AllGather::NCCL_Allreduce_AllGather(
   }
 }
 
+size_t NCCL_Allreduce_AllGather::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  size_t chunk_size = tensor_fusion_threshold_;
+  return chunk_size * world_size + chunk_size;
+}
+
 Status NCCL_Allreduce_AllGather::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
   int64_t chunk_size = tensor_fusion_threshold_;
-  int64_t buffer_size =
-      chunk_size * world_size + chunk_size;
+  int64_t buffer_size = chunk_size * world_size + chunk_size;
 
   auto status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -41,8 +46,7 @@ Status NCCL_Allreduce_AllGather::Init(
   void* buffer_data =
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_recv_ = (unsigned char*)buffer_data;
-  decompress_buffer_ =
-      gradients_recv_ + chunk_size * world_size;
+  decompress_buffer_ = gradients_recv_ + chunk_size * world_size;
   stream_ =
       &gpu_context_
            ->streams[global_state_->current_nccl_stream][entries[0].device];

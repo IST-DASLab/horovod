@@ -19,6 +19,12 @@ NCCL_Allreduce_Ring::NCCL_Allreduce_Ring(
   }
 }
 
+size_t NCCL_Allreduce_Ring::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  size_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
+  return chunk_size * world_size + chunk_size + chunk_size;
+}
+
 Status NCCL_Allreduce_Ring::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
@@ -59,6 +65,7 @@ Status NCCL_Allreduce_Ring::Init(
   if (!status.ok()) {
     return status;
   }
+  initialized_ = true;
   return Status::OK();
 }
 

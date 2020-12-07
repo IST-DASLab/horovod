@@ -313,7 +313,7 @@ class _DistributedAdasumOptimizer(torch.optim.Optimizer):
         p.data.sub_(start)
 
         # allreduce as before
-        tensor_compressed, ctx = self._compression.compress(p, self._step)
+        tensor_compressed, ctx = self._compression.compress(p, 0)
         handle = allreduce_async_(tensor_compressed.data, name=name, op=Adasum)
 
         # reset stashed parameters

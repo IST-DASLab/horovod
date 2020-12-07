@@ -27,8 +27,10 @@ void Compressor::SetQuantizationLevels(float* levels, int bits) {
   std::cout << "I don't set anything" << std::endl;
 }
 
+size_t Compressor::GetRequiredFreeSize() { return 0; }
+
 Compressor::Compressor(HorovodGlobalState* global_state)
-    : global_state_(global_state) {
+    : global_state_(global_state), initialized_(false) {
   default_config.bucket_size = GetIntEnvOrDefault(
       HOROVOD_COMPRESSION_BUCKET_SIZE, COMPRESSION_BUCKET_SIZE);
   default_config.skip_incomplete_buckets = false;
@@ -570,6 +572,7 @@ Status CPUNormalizedQuantizer::Init(
                      levels_type_);
     }
   }
+  initialized_ = true;
   return Status::OK();
 }
 

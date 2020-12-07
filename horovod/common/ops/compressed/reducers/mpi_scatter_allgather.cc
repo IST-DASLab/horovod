@@ -14,6 +14,14 @@ MPI_Allreduce_ScatterReduceAllgather::MPI_Allreduce_ScatterReduceAllgather(
   }
 }
 
+size_t MPI_Allreduce_ScatterReduceAllgather::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  size_t chunk_size =
+      ALIGNED_SIZE((tensor_fusion_threshold_ + world_size - 1) / world_size);
+  return chunk_size * (world_size - 1) +
+                        + chunk_size * (world_size - 1) + chunk_size;
+}
+
 Status MPI_Allreduce_ScatterReduceAllgather::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries,
     MPI_Comm comm) {
@@ -62,6 +70,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::Init(
     }
     return status;
   }
+  initialized_ = true;
   return Status::OK();
 }
 
@@ -99,7 +108,6 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     send_compressed_size = ALIGNED_SIZE(compressor_->Compress(
         send_buf, entries, error_feedback_, start_offset, global_offset,
         send_num_elems, true, false, &stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
     send_buf += send_compressed_size;
     send_sizes.push(send_compressed_size);
   }
@@ -201,7 +209,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   MPI_CHECK(MPI_Waitall((int)send_requests.size(), send_requests.data(),
                         MPI_STATUSES_IGNORE));
   compressor_->Finalize();
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   return Status::OK();
 }
 

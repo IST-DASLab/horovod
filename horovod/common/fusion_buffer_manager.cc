@@ -14,6 +14,7 @@
 // =============================================================================
 
 #include "fusion_buffer_manager.h"
+#include "logging.h"
 
 namespace horovod {
 namespace common {
@@ -33,7 +34,7 @@ Status FusionBufferManager::InitializeBuffer(int64_t threshold, int device, std:
   if (buffer == nullptr) {
     on_start_init();
     size = threshold;
-
+    LOG(INFO) << "Allocate: " << size / (1024 * 1024) << " MB." << std::endl;
     // Lazily allocate persistent buffer for Tensor Fusion and keep it
     // forever per device.
     Status status = context->AllocatePersistent(threshold, &buffer);

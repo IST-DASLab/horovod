@@ -18,14 +18,19 @@ SHM_Allreduce_Tree::SHM_Allreduce_Tree(MPIContext* mpi_context,
   hcomm_.reset();
 }
 
+size_t SHM_Allreduce_Tree::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  int64_t chunk_size = tensor_fusion_threshold_;
+  int64_t buffer_size = 3 * chunk_size + chunk_size * world_size / 2;
+}
+
 Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
                                 MPI_Comm comm) {
   comm_ = comm;
   auto& first_entry = entries[0];
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
-  int64_t chunk_size =
-      global_state_->parameter_manager.TensorFusionThresholdBytes();
+  int64_t chunk_size = tensor_fusion_threshold_;
   int64_t buffer_size = chunk_size + chunk_size + chunk_size;
   auto status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -75,6 +80,7 @@ Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
       hcomm_.reset(sComm);
     }
   }
+  initialized_ = true;
   return Status::OK();
 }
 

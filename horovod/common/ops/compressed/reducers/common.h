@@ -7,6 +7,10 @@
   do {                                                                         \
     int op = condition;                                                        \
     if (op != MPI_SUCCESS) {                                                   \
+      int len;                                                                 \
+      char estring[MPI_MAX_ERROR_STRING];                                      \
+      MPI_Error_string(op, estring, &len);                                  \
+      printf("%s on line %i. MPI Error: %s\n", #condition, __LINE__, estring); \
       throw std::runtime_error(std::string(#condition) + " on line " +         \
                                std::to_string(__LINE__) + " failed: ");        \
     }                                                                          \
@@ -15,7 +19,7 @@
 #define SYS_CHECK(call, name)                                                  \
   do {                                                                         \
     int retval;                                                                \
-    SYS_CHECKVAL(call, name, retval);                                           \
+    SYS_CHECKVAL(call, name, retval);                                          \
   } while (false)
 
 #define SYS_CHECKSYNC(call, name, retval)                                      \

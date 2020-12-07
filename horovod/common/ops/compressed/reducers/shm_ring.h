@@ -15,6 +15,7 @@ struct SHM_Allreduce_Ring : public SHMReducer {
 
   Status Init(const std::vector<TensorTableEntry>& entries,
               MPI_Comm comm) override;
+  size_t GetRequiredFreeSize() override;
 };
 
 } // namespace common

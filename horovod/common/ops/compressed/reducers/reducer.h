@@ -17,7 +17,7 @@ public:
   Reducer(HorovodGlobalState* global_state, Compressor* compressor,
           Summator* summator)
       : global_state_(global_state), compressor_(compressor),
-        error_feedback_(summator) {
+        error_feedback_(summator), initialized_(false) {
     tensor_fusion_threshold_ =
         global_state->parameter_manager.TensorFusionThresholdBytes();
   }
@@ -30,6 +30,8 @@ public:
     error_feedback_.Apply(entries);
   }
 
+  virtual size_t GetRequiredFreeSize() = 0;
+  bool isInitialized() {return initialized_;}
 protected:
   HorovodGlobalState* global_state_;
 
@@ -44,6 +46,7 @@ protected:
   unsigned char* gradients_recv_ = nullptr;
   unsigned char* decompress_buffer_ = nullptr;
   int64_t tensor_fusion_threshold_;
+  bool initialized_;
 };
 
 class MPIReducer : public Reducer {

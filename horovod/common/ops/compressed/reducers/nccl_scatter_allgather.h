@@ -17,7 +17,7 @@ public:
   AllreduceDivision(int num_elements, ncclComm_t* nccl_comm_,
                     std::vector<horovod::common::TensorTableEntry>& entries,
                     int64_t global_offset) final;
-
+  size_t GetRequiredFreeSize() override;
 };
 
 } // namespace common

@@ -17,6 +17,13 @@ NCCL_Allreduce_ScatterAllgather::NCCL_Allreduce_ScatterAllgather(
   }
 }
 
+size_t NCCL_Allreduce_ScatterAllgather::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  size_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
+  return chunk_size * (world_size - 1) + chunk_size * (world_size - 1) +
+         chunk_size;
+}
+
 Status NCCL_Allreduce_ScatterAllgather::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
@@ -24,7 +31,7 @@ Status NCCL_Allreduce_ScatterAllgather::Init(
   int world_size = global_state_->controller->GetSize();
   int64_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
   int64_t buffer_size = chunk_size * (world_size - 1) +
-                        +chunk_size * (world_size - 1) + chunk_size;
+                        chunk_size * (world_size - 1) + chunk_size;
 
   stream_ =
       &gpu_context_
@@ -67,6 +74,7 @@ Status NCCL_Allreduce_ScatterAllgather::Init(
     }
     return status;
   }
+  initialized_ = true;
   return Status::OK();
 }
 

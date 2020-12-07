@@ -20,6 +20,12 @@ SHM_Allreduce_Ring::SHM_Allreduce_Ring(MPIContext* mpi_context,
   hcomm_.reset();
 }
 
+size_t SHM_Allreduce_Ring::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  size_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
+  return 2 * chunk_size;
+}
+
 Status SHM_Allreduce_Ring::Init(const std::vector<TensorTableEntry>& entries,
                                 MPI_Comm comm) {
   comm_ = comm;
@@ -74,6 +80,7 @@ Status SHM_Allreduce_Ring::Init(const std::vector<TensorTableEntry>& entries,
       hcomm_.reset(pComm);
     }
   }
+  initialized_ = true;
   return Status::OK();
 }
 

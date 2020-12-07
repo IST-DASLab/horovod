@@ -20,7 +20,8 @@ GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
 
   int chunk_size =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
-  int num_elems_in_chunk = ceil(((double)chunk_size) / sizeof(float));
+  int num_elems_in_chunk =
+      ceil(((double)chunk_size) / get_sizeof(first_entry.tensor->dtype()));
   int64_t curand_array_size =
       cuda::CUDA_get_curand_array_size(num_elems_in_chunk);
   Status status = bufferManager_.InitializeBuffer(
@@ -46,6 +47,7 @@ GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
 }
 
 Status GPUDummyCompressor::Init(const std::vector<TensorTableEntry>& entries) {
+  initialized_ = true;
   return gpu_compression_context_->Init(entries);
 }
 
@@ -86,7 +88,16 @@ void GPUDummyCompressor::Finalize() {}
 
 Status GPUMaxMinQuantizer::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
+  initialized_ = true;
   return gpu_compression_context_->Init(entries);
+}
+
+size_t GPUMaxMinQuantizer::GetRequiredFreeSize() {
+  int chunk_size =
+      global_state_->parameter_manager.TensorFusionThresholdBytes();
+  int num_elems_in_chunk =
+      ceil(((double)chunk_size) / get_sizeof(HOROVOD_FLOAT16));
+  return cuda::CUDA_get_curand_array_size(num_elems_in_chunk);
 }
 
 int64_t GPUMaxMinQuantizer::Compress(
@@ -98,9 +109,10 @@ int64_t GPUMaxMinQuantizer::Compress(
   cudaStream_t* stream = (cudaStream_t*)ctx;
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets;
+  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets ||
+                               num_elems < MIN_SIZE_TO_COMPRESS;
   int num_elems_to_compress = num_elems;
-  int residual_elems;
+  int residual_elems = 0;
   int compressed_size = 0;
   if (skip_incomplete) {
     num_elems_to_compress = (num_elems / bucket_size) * bucket_size;
@@ -138,7 +150,8 @@ void GPUMaxMinQuantizer::Decompress(
   cudaStream_t* stream = (cudaStream_t*)ctx;
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets;
+  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets ||
+                               num_elems < MIN_SIZE_TO_COMPRESS;
   int num_elems_to_decompress = num_elems;
   int residual_elems = 0;
   if (skip_incomplete) {
@@ -192,7 +205,8 @@ GPUMaxMinQuantizer::BufferSize(int num_elems, DataType dtype,
     return 0;
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets;
+  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets ||
+                               num_elems < MIN_SIZE_TO_COMPRESS;
   int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   int residuals = 0;
   if (skip_incomplete) {
@@ -211,6 +225,13 @@ void GPUMaxMinQuantizer::Finalize() {}
 // ================
 // Normalized Quantizers
 // ================
+size_t GPUNormalizedQuantizer::GetRequiredFreeSize() {
+  int chunk_size =
+      global_state_->parameter_manager.TensorFusionThresholdBytes();
+  int num_elems_in_chunk =
+      ceil(((double)chunk_size) / get_sizeof(HOROVOD_FLOAT16));
+  return cuda::CUDA_get_curand_array_size(num_elems_in_chunk);
+}
 
 Status GPUNormalizedQuantizer::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
@@ -244,6 +265,7 @@ Status GPUNormalizedQuantizer::Init(
       delete[] host_levels;
     }
   }
+  initialized_ = true;
   return Status::OK();
 }
 
@@ -286,7 +308,8 @@ inline int64_t GPUNormalizedQuantizer::BufferSize(
     return 0;
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets;
+  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets ||
+                               num_elems < MIN_SIZE_TO_COMPRESS;
   int residual_elems = 0;
   int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   if (skip_incomplete) {
@@ -309,7 +332,8 @@ int64_t GPUNormalizedQuantizer::Compress(
   }
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets;
+  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets ||
+                               num_elems < MIN_SIZE_TO_COMPRESS;
   cudaStream_t* stream = (cudaStream_t*)ctx;
   int num_elems_compress = num_elems;
   int residual_elems = 0;
@@ -321,14 +345,15 @@ int64_t GPUNormalizedQuantizer::Compress(
   if (num_elems_compress > 0) {
     if (dtype != DataType::HOROVOD_FLOAT16) {
       cuda::CUDA_quantize_Norm<float>(
-          input, output, feedback, bits_to_levels_[bits], num_elems_compress, bits,
-          bucket_size, gpu_compression_context_->cuda_states_, norm_type_,
+          input, output, feedback, bits_to_levels_[bits], num_elems_compress,
+          bits, bucket_size, gpu_compression_context_->cuda_states_, norm_type_,
           levels_type_, *stream);
     } else {
-      cuda::CUDA_quantize_Norm<Half>(
-          input, output, feedback, bits_to_levels_fp16_[bits], num_elems_compress, bits,
-          bucket_size, gpu_compression_context_->cuda_states_, norm_type_,
-          levels_type_, *stream);
+      cuda::CUDA_quantize_Norm<Half>(input, output, feedback,
+                                     bits_to_levels_fp16_[bits],
+                                     num_elems_compress, bits, bucket_size,
+                                     gpu_compression_context_->cuda_states_,
+                                     norm_type_, levels_type_, *stream);
     }
   }
   if (skip_incomplete and residual_elems > 0) {
@@ -350,7 +375,8 @@ void GPUNormalizedQuantizer::Decompress(
     return;
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets;
+  const bool skip_incomplete = compression_cfg.skip_incomplete_buckets ||
+                               num_elems < MIN_SIZE_TO_COMPRESS;
   int num_elems_decompress = num_elems;
   int residual_elems = 0;
   if (skip_incomplete) {
@@ -362,22 +388,22 @@ void GPUNormalizedQuantizer::Decompress(
     if (add) {
       if (dtype != DataType::HOROVOD_FLOAT16) {
         cuda::CUDA_dequantize_Norm<float, true>(
-            input, output, bits_to_levels_[bits], num_elems_decompress, bits, bucket_size,
-            levels_type_, *stream);
+            input, output, bits_to_levels_[bits], num_elems_decompress, bits,
+            bucket_size, levels_type_, *stream);
       } else {
         cuda::CUDA_dequantize_Norm<Half, true>(
-            input, output, bits_to_levels_fp16_[bits], num_elems_decompress, bits,
-            bucket_size, levels_type_, *stream);
+            input, output, bits_to_levels_fp16_[bits], num_elems_decompress,
+            bits, bucket_size, levels_type_, *stream);
       }
     } else {
       if (dtype != DataType::HOROVOD_FLOAT16) {
         cuda::CUDA_dequantize_Norm<float, false>(
-            input, output, bits_to_levels_[bits], num_elems_decompress, bits, bucket_size,
-            levels_type_, *stream);
+            input, output, bits_to_levels_[bits], num_elems_decompress, bits,
+            bucket_size, levels_type_, *stream);
       } else {
         cuda::CUDA_dequantize_Norm<Half, false>(
-            input, output, bits_to_levels_fp16_[bits], num_elems_decompress, bits,
-            bucket_size, levels_type_, *stream);
+            input, output, bits_to_levels_fp16_[bits], num_elems_decompress,
+            bits, bucket_size, levels_type_, *stream);
       }
     }
   }

@@ -15,6 +15,7 @@ struct MPI_Allreduce_AllGather : public MPIReducer {
                            int64_t global_offset) override;
   Status Init(const std::vector<TensorTableEntry>& entries,
               MPI_Comm comm) override;
+  size_t GetRequiredFreeSize() override;
 };
 
 } // namespace common

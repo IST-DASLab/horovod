@@ -79,13 +79,16 @@ public:
                                   const std::vector<TensorTableEntry>& entries,
                                   std::vector<int>& offsets,
                                   std::vector<int>& sizes);
+  virtual size_t GetRequiredFreeSize();
+  bool isInitialized() { return initialized_;}
 protected:
+  const int MIN_SIZE_TO_COMPRESS = 16;
   // The size of the bucket.
   //  int bucket_size_;
   HorovodGlobalState* global_state_;
   CompressionModuleConfig default_config;
   CompressionModuleConfig& GetModuleConfig(const std::string& name);
-
+  bool initialized_;
 private:
   void ParseYaml(const char* file);
   map_compresion_configs modules_configs;

@@ -1,13 +1,13 @@
 #ifndef HOROVOD_TEST_CUDA_DEF_H
 #define HOROVOD_TEST_CUDA_DEF_H
-#include <cuda_runtime_api.h>
-#include <cuda_runtime.h>
 #include <cuda_fp16.h>
-#include <stdint.h>
-#include <string>
-#include <stdexcept>
+#include <cuda_runtime.h>
+#include <cuda_runtime_api.h>
 #include <curand.h>
 #include <curand_kernel.h>
+#include <stdexcept>
+#include <stdint.h>
+#include <string>
 
 #define Half __half
 //#define CurandState int
@@ -18,6 +18,8 @@
   do {                                                                         \
     cudaError_t cuda_result = condition;                                       \
     if (cuda_result != cudaSuccess) {                                          \
+      printf("%s on line %i in %s returned: %s\n", #condition, __LINE__,       \
+             __FILE__, cudaGetErrorString(cuda_result));                       \
       throw std::runtime_error(                                                \
           std::string(#condition) + " on line " + std::to_string(__LINE__) +   \
           " returned: " + cudaGetErrorString(cuda_result));                    \
@@ -32,7 +34,6 @@ struct xorshift128p_state {
   uint64_t a, b;
 };
 
-
 const float EPS = 1e-10;
 const int PACK_SIZE = 8;
 const int MAX_THREADS_PER_BLOCK = 1024;
@@ -43,9 +44,8 @@ const int WARP_SIZE = 32;
 
 constexpr int MIN(int a, int b) { return (a > b) ? b : a; }
 
-
-constexpr int BLOCKS_PER_GRID(int num_elems) {
-  return MIN((num_elems + (MAX_THREADS_PER_BLOCK - 1)) / MAX_THREADS_PER_BLOCK,
+constexpr int BLOCKS_PER_GRID(int num_elems, int threads_per_block) {
+  return MIN((num_elems + (threads_per_block - 1)) / threads_per_block,
              MAX_NUMBER_OF_BLOCKS);
 }
 
@@ -69,10 +69,8 @@ typedef union {
   unsigned char a[4];
 } U4;
 
-
 } // namespace cuda
 } // namespace common
 } // namespace horovod
-
 
 #endif // HOROVOD_TEST_CUDA_DEF_H

@@ -14,6 +14,12 @@ MPI_Allreduce_PS::MPI_Allreduce_PS(MPIContext* mpi_context,
   }
 }
 
+size_t MPI_Allreduce_PS::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  int64_t chunk_size = tensor_fusion_threshold_;
+  return chunk_size + chunk_size * (world_size - 1);
+}
+
 Status MPI_Allreduce_PS::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries,
     MPI_Comm comm) {
@@ -21,8 +27,7 @@ Status MPI_Allreduce_PS::Init(
   auto& first_entry = entries[0];
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
-  int64_t chunk_size =
-      global_state_->parameter_manager.TensorFusionThresholdBytes();
+  int64_t chunk_size = tensor_fusion_threshold_;
   int64_t buffer_size = chunk_size + chunk_size * (world_size - 1);
 
   auto status = bufferManager_.InitializeBuffer(
@@ -49,6 +54,7 @@ Status MPI_Allreduce_PS::Init(
     return status;
   }
   status = error_feedback_.Init(entries);
+  initialized_ = true;
   return status;
 }
 

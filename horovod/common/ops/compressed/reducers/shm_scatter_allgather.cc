@@ -19,6 +19,12 @@ SHM_Allreduce_ScatterReduceAllgather::SHM_Allreduce_ScatterReduceAllgather(
   hcomm_.reset();
 }
 
+size_t SHM_Allreduce_ScatterReduceAllgather::GetRequiredFreeSize() {
+  int world_size = global_state_->controller->GetSize();
+  size_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
+  return chunk_size * (world_size - 1) + chunk_size * (world_size - 1) + 2 * chunk_size * world_size;
+}
+
 Status SHM_Allreduce_ScatterReduceAllgather::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries,
     MPI_Comm comm) {
@@ -100,6 +106,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
           cudaEventCreateWithFlags(&events_.back(), cudaEventDisableTiming));
     }
   }
+  initialized_ = true;
   return Status::OK();
 }
 

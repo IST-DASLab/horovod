@@ -7,8 +7,8 @@
 #include "reducers/mpi_ring.h"
 #include "reducers/mpi_scatter_allgather.h"
 #include "reducers/shm_ring.h"
-#include "reducers/shm_tree.h"
 #include "reducers/shm_scatter_allgather.h"
+#include "reducers/shm_tree.h"
 #include "utils.h"
 
 #include <chrono>
@@ -44,8 +44,8 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
           mpi_context, gpu_context, global_state, compressor, summator);
       break;
     case ReductionType::Ring:
-      reducer_ = new MPI_Allreduce_Ring(mpi_context, gpu_context,
-                                          global_state, compressor, summator);
+      reducer_ = new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state,
+                                        compressor, summator);
       break;
     case ReductionType::ScatterAllgather:
       reducer_ = new MPI_Allreduce_ScatterReduceAllgather(
@@ -53,7 +53,7 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
       break;
     case ReductionType::PS:
       reducer_ = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
-                                        compressor, summator);
+                                      compressor, summator);
       break;
     default:
       reducer_ = nullptr;
@@ -77,8 +77,9 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
                                  compressor, summator, communicator_type);
       break;
     case ReductionType::Tree:
-      reducer_ = new SHM_Allreduce_Tree(mpi_context, gpu_context, global_state,
-                                          compressor, summator, communicator_type);
+      reducer_ =
+          new SHM_Allreduce_Tree(mpi_context, gpu_context, global_state,
+                                 compressor, summator, communicator_type);
       break;
     default:
       reducer_ = nullptr;
@@ -111,7 +112,7 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
       status = reducer_->AllreduceDivision(num_elements_division, entries,
-                                             global_offset);
+                                           global_offset);
       if (!status.ok())
         break;
       global_offset += (tensor_fusion_threshold / sizeof(float));
@@ -147,6 +148,15 @@ bool MPI_GPUCompressedAllReduce::Enabled(
     const horovod::common::ParameterManager& param_manager,
     const std::vector<TensorTableEntry>& entries,
     const horovod::common::Response& response) const {
+  size_t free = 0, total;
+  cuMemGetInfo(&free, &total);
+  size_t need_free = (reducer_ != nullptr and !reducer_->isInitialized())
+                         ? reducer_->GetRequiredFreeSize()
+                         : 0;
+  need_free += (compressor_ != nullptr and !compressor_->isInitialized())
+                   ? compressor_->GetRequiredFreeSize()
+                   : 0;
+  int result = 1;
   if (reducer_ == nullptr ||
       NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *
               sizeof(float) <
@@ -154,7 +164,15 @@ bool MPI_GPUCompressedAllReduce::Enabled(
       !EnabledName(entries[0].tensor_name) ||
       !(entries[0].tensor->dtype() == HOROVOD_FLOAT32 ||
         entries[0].tensor->dtype() == HOROVOD_FLOAT16) ||
-      entries[0].device == CPU_DEVICE_ID) {
+      entries[0].device == CPU_DEVICE_ID || need_free > free) {
+    result = 0;
+  }
+  MPI_Allreduce((void*)&result, (void*)&result, 1, MPI_INT, MPI_SUM,
+                MPI_COMM_WORLD);
+  if (result < global_state_->controller->GetSize()) {
+    if (need_free > free) {
+      LOG(DEBUG) << "Switch to nccl due to lack of memory";
+    }
     return false;
   }
   return GPUAllreduce::Enabled(param_manager, entries, response);
