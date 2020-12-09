@@ -8,8 +8,7 @@ namespace common {
 
 struct MPI_Allreduce_PS : public MPIReducer {
   MPI_Allreduce_PS(MPIContext* mpi_context, GPUContext* gpu_context,
-                   HorovodGlobalState* global_state, Compressor* compressor,
-                   Summator* summator);
+                   HorovodGlobalState* global_state, Compressor* compressor);
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
                            int64_t global_offset) override;

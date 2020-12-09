@@ -8,7 +8,7 @@ namespace common {
 struct SHM_Allreduce_Ring : public SHMReducer {
   SHM_Allreduce_Ring(MPIContext* mpi_context, GPUContext* gpu_context,
                      HorovodGlobalState* global_state, Compressor* compressor,
-                     Summator* summator, CommunicatorType comm_type);
+                     CommunicatorType comm_type);
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
                            int64_t global_offset) override;

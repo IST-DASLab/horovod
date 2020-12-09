@@ -8,9 +8,8 @@ SHM_Allreduce_Tree::SHM_Allreduce_Tree(MPIContext* mpi_context,
                                        GPUContext* gpu_context,
                                        HorovodGlobalState* global_state,
                                        Compressor* compressor,
-                                       Summator* summator,
                                        CommunicatorType comm_type)
-    : SHMReducer(mpi_context, gpu_context, global_state, compressor, summator,
+    : SHMReducer(mpi_context, gpu_context, global_state, compressor,
                  comm_type) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "SHM_Ring";
@@ -53,14 +52,6 @@ Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
   gradients_recv_ = (unsigned char*)gradients_send_ + chunk_size;
   decompress_buffer_ = gradients_recv_ + chunk_size;
 
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
-  status = error_feedback_.Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
   if (hcomm_ == nullptr) {
     int rank = global_state_->controller->GetRank();
     std::vector<int> ranks;
@@ -80,8 +71,7 @@ Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
       hcomm_.reset(sComm);
     }
   }
-  initialized_ = true;
-  return Status::OK();
+  return Reducer::Init(entries);
 }
 
 Status
@@ -111,9 +101,8 @@ SHM_Allreduce_Tree::AllreduceDivision(int num_elements,
                               num_elements, true, &stream);
     } else {
       peer_rank = rank - shift;
-      compressor_->Compress(gradients_send_, entries, error_feedback_,
-                            (int64_t)0, global_offset, num_elements, false,
-                            false, &stream);
+      compressor_->Compress(gradients_send_, entries, (int64_t)0, global_offset,
+                            num_elements, false, false, &stream);
       hcomm_->Send(gradients_send_, send_rcv_size, peer_rank, stream, 0);
       break;
     }
@@ -121,8 +110,8 @@ SHM_Allreduce_Tree::AllreduceDivision(int num_elements,
   }
 
   if (rank == 0) {
-    compressor_->Compress(gradients_send_, entries, error_feedback_, 0,
-                          global_offset, num_elements, false, true, &stream);
+    compressor_->Compress(gradients_send_, entries, 0, global_offset,
+                          num_elements, false, true, &stream);
   }
   // Second round. Top-down. Propagate reduced values.
   while (shift > 1) {

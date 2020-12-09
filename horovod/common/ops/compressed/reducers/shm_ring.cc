@@ -10,9 +10,8 @@ SHM_Allreduce_Ring::SHM_Allreduce_Ring(MPIContext* mpi_context,
                                        GPUContext* gpu_context,
                                        HorovodGlobalState* global_state,
                                        Compressor* compressor,
-                                       Summator* summator,
                                        CommunicatorType comm_type)
-    : SHMReducer(mpi_context, gpu_context, global_state, compressor, summator,
+    : SHMReducer(mpi_context, gpu_context, global_state, compressor,
                  comm_type) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "SHM_Ring";
@@ -55,15 +54,6 @@ Status SHM_Allreduce_Ring::Init(const std::vector<TensorTableEntry>& entries,
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_send_ = (unsigned char*)buffer_data;
   gradients_recv_ = gradients_send_ + chunk_size;
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
-  status = error_feedback_.Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
-
   if (hcomm_ == nullptr) {
     int rank = global_state_->controller->GetRank();
     std::vector<int> send_ranks;
@@ -80,8 +70,7 @@ Status SHM_Allreduce_Ring::Init(const std::vector<TensorTableEntry>& entries,
       hcomm_.reset(pComm);
     }
   }
-  initialized_ = true;
-  return Status::OK();
+  return Reducer::Init(entries);
 }
 
 Status
@@ -117,7 +106,7 @@ SHM_Allreduce_Ring::AllreduceDivision(int num_elements,
     recv_size = ALIGNED_SIZE(compressor_->BufferSize(
         chunk_sizes[recv_segment_idx], entries, buf_recv_idx, global_offset));
     send_size = ALIGNED_SIZE(compressor_->Compress(
-        gradients_send_, entries, error_feedback_, buf_send_idx, global_offset,
+        gradients_send_, entries, buf_send_idx, global_offset,
         chunk_sizes[send_segment_idx], i == 0, false, (void*)&stream));
 
     hcomm_->Send(gradients_send_, send_size, send_to, stream, agg_send_offset);
@@ -135,11 +124,10 @@ SHM_Allreduce_Ring::AllreduceDivision(int num_elements,
   buf_send_idx = offsets[send_segment_idx];
   unsigned char* send_buf = gradients_send_;
   send_size = ALIGNED_SIZE(compressor_->Compress(
-      send_buf, entries, error_feedback_, buf_send_idx, global_offset,
+      send_buf, entries, buf_send_idx, global_offset,
       chunk_sizes[send_segment_idx], false, true, (void*)&stream));
   compressor_->Decompress(send_buf, entries, buf_send_idx, global_offset,
-                          chunk_sizes[send_segment_idx], false,
-                          (void*)&stream);
+                          chunk_sizes[send_segment_idx], false, (void*)&stream);
   agg_send_offset = 0;
   agg_recv_offset = 0;
   // Second round
@@ -156,8 +144,8 @@ SHM_Allreduce_Ring::AllreduceDivision(int num_elements,
     CUDA_CHECK(cudaMemcpyAsync(gradients_send_, peer_buf, recv_size,
                                cudaMemcpyDeviceToDevice, stream));
     compressor_->Decompress(gradients_send_, entries, buf_recv_idx,
-                            global_offset, chunk_sizes[recv_segment_idx],
-                            false, (void*)&stream);
+                            global_offset, chunk_sizes[recv_segment_idx], false,
+                            (void*)&stream);
     send_size = recv_size;
   }
   hcomm_->WaitSendAll();

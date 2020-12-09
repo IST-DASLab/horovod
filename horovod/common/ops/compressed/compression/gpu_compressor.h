@@ -24,8 +24,9 @@ public:
 
 class GPUDummyCompressor : public DummyCompressor {
 public:
-  GPUDummyCompressor(GPUContext* gpu_context, HorovodGlobalState* global_state)
-      : DummyCompressor(global_state) {
+  GPUDummyCompressor(GPUContext* gpu_context, HorovodGlobalState* global_state,
+                     Summator* summator)
+      : DummyCompressor(global_state, summator) {
     gpu_compression_context_ = std::unique_ptr<GPUCompressionContext>(
         new GPUCompressionContext(gpu_context, global_state));
   }
@@ -39,8 +40,6 @@ public:
                   const CompressionModuleConfig& compression_cfg,
                   void* ctx) override;
   Status Init(const std::vector<TensorTableEntry>& entries) override;
-  void Finalize() override;
-
 private:
   std::unique_ptr<GPUCompressionContext> gpu_compression_context_;
 };
@@ -48,8 +47,8 @@ private:
 class GPUMaxMinQuantizer : public MaxMinQuantizer {
 public:
   GPUMaxMinQuantizer(GPUContext* gpu_context, HorovodGlobalState* global_state,
-                     int quantization_bits)
-      : MaxMinQuantizer(global_state, quantization_bits) {
+                     Summator* summator, int quantization_bits)
+      : MaxMinQuantizer(global_state, summator, quantization_bits) {
     gpu_compression_context_ = std::unique_ptr<GPUCompressionContext>(
         new GPUCompressionContext(gpu_context, global_state));
   };
@@ -66,7 +65,6 @@ public:
   int64_t BufferSize(int num_elems, DataType dtype,
                      const CompressionModuleConfig& compression_cfg) final;
   virtual size_t GetRequiredFreeSize() final;
-  void Finalize();
 
 private:
   std::unique_ptr<GPUCompressionContext> gpu_compression_context_;
@@ -76,18 +74,17 @@ class GPUNormalizedQuantizer : public NormalizedQuantizer {
 public:
   GPUNormalizedQuantizer(GPUContext* gpu_context,
                          horovod::common::HorovodGlobalState* global_state,
-                         int quantization_bits,
+                         Summator* summator, int quantization_bits,
                          CompressionType compression_type, NormType norm_type,
                          LevelsType levels_type)
-      : NormalizedQuantizer(global_state, quantization_bits, compression_type,
-                            norm_type, levels_type) {
+      : NormalizedQuantizer(global_state, summator, quantization_bits,
+                            compression_type, norm_type, levels_type) {
     gpu_compression_context_ = std::unique_ptr<GPUCompressionContext>(
         new GPUCompressionContext(gpu_context, global_state));
   }
 
   Status Init(const std::vector<horovod::common::TensorTableEntry>& entries);
   void SetQuantizationLevels(float* levels, int bits) override;
-  void Finalize();
   int64_t BufferSize(int num_elems, DataType dtype,
                      const CompressionModuleConfig& compression_cfg) final;
   int64_t Compress(unsigned char* input, unsigned char* output,
@@ -99,6 +96,7 @@ public:
                   const CompressionModuleConfig& compression_cfg,
                   void* ctx) override;
   virtual size_t GetRequiredFreeSize() final;
+
 protected:
   std::map<int, Half*> bits_to_levels_fp16_;
   std::unique_ptr<GPUCompressionContext> gpu_compression_context_;

@@ -5,7 +5,8 @@ namespace horovod {
 namespace common {
 
 Compressor* CreateGPUCompressor(GPUContext* gpu_context,
-                                HorovodGlobalState* global_state) {
+                                HorovodGlobalState* global_state,
+                                Summator* summator) {
   auto compression_type = GetEnumEnvOrDefault<CompressionType>(
       HOROVOD_COMPRESSION, CompressionType::NoneCompression);
   auto norm_type = GetEnumEnvOrDefault<NormType>(HOROVOD_COMPRESSION_NORM_TYPE,
@@ -16,18 +17,18 @@ Compressor* CreateGPUCompressor(GPUContext* gpu_context,
   auto quantization_bits = GetIntEnvOrDefault(HOROVOD_QUANTIZATION_BITS, 32);
   Compressor* compressor;
   if (quantization_bits == 32 || compression_type == NoneCompression) {
-    compressor = new GPUDummyCompressor(gpu_context, global_state);
+    compressor = new GPUDummyCompressor(gpu_context, global_state, summator);
   } else {
     switch (compression_type) {
     case CompressionType::MaxMin:
-      compressor =
-          new GPUMaxMinQuantizer(gpu_context, global_state, quantization_bits);
+      compressor = new GPUMaxMinQuantizer(gpu_context, global_state, summator,
+                                          quantization_bits);
       break;
     case CompressionType::Exp:
     case CompressionType::Uni:
       compressor = new GPUNormalizedQuantizer(
-          gpu_context, global_state, quantization_bits, compression_type,
-          norm_type, levels_type);
+          gpu_context, global_state, summator, quantization_bits,
+          compression_type, norm_type, levels_type);
       break;
     default:
       throw std::logic_error("Invalid compression type.");

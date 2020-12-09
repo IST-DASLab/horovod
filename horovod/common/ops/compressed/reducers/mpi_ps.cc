@@ -7,8 +7,8 @@ namespace common {
 MPI_Allreduce_PS::MPI_Allreduce_PS(MPIContext* mpi_context,
                                    GPUContext* gpu_context,
                                    HorovodGlobalState* global_state,
-                                   Compressor* compressor, Summator* summator)
-    : MPIReducer(mpi_context, gpu_context, global_state, compressor, summator) {
+                                   Compressor* compressor)
+    : MPIReducer(mpi_context, gpu_context, global_state, compressor) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "MPI Parameter-Server";
   }
@@ -49,13 +49,7 @@ Status MPI_Allreduce_PS::Init(
       const_cast<void*>(buffer->AccessData(first_entry.context));
   gradients_send_ = (unsigned char*)buffer_data;
   gradients_recv_ = (unsigned char*)gradients_send_ + chunk_size;
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
-  status = error_feedback_.Init(entries);
-  initialized_ = true;
-  return status;
+  return Reducer::Init(entries);
 }
 
 Status MPI_Allreduce_PS::AllreduceDivision(
@@ -100,14 +94,12 @@ Status MPI_Allreduce_PS::AllreduceDivision(
 
     // Second round.
     // Broadcast the result
-    compressor_->Compress(gradients_send_, entries, error_feedback_, 0,
+    compressor_->Compress(gradients_send_, entries, 0,
                           global_offset, num_elements, false, true, &stream);
-    compressor_->Finalize();
   } else {
     send_rcv_size = ALIGNED_SIZE(compressor_->Compress(
-        gradients_send_, entries, error_feedback_, 0, global_offset,
+        gradients_send_, entries, 0, global_offset,
         num_elements, true, false, &stream));
-    compressor_->Finalize();
     op = MPI_Send(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, 0,
                   comm_);
     if (op != MPI_SUCCESS) {

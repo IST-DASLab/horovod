@@ -9,7 +9,7 @@ namespace common {
 struct MPI_Allreduce_AllGather : public MPIReducer {
   MPI_Allreduce_AllGather(MPIContext* mpi_context, GPUContext* gpu_context,
                           HorovodGlobalState* global_state,
-                          Compressor* compressor, Summator* summator);
+                          Compressor* compressor);
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
                            int64_t global_offset) override;

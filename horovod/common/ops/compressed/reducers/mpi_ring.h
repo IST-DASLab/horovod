@@ -8,8 +8,7 @@ namespace common {
 class MPI_Allreduce_Ring : public MPIReducer {
 public:
   MPI_Allreduce_Ring(MPIContext* mpi_context, GPUContext* gpu_context,
-                     HorovodGlobalState* global_state, Compressor* compressor,
-                     Summator* summator);
+                     HorovodGlobalState* global_state, Compressor* compressor);
 
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,

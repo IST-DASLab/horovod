@@ -9,9 +9,9 @@ namespace common {
 NCCL_Allreduce_ScatterAllgather::NCCL_Allreduce_ScatterAllgather(
     NCCLContext* nccl_context, GPUContext* gpu_context,
     GPUOpContext* gpu_op_context, HorovodGlobalState* global_state,
-    Compressor* compressor, Summator* summator)
+    Compressor* compressor)
     : NCCLReducer(nccl_context, gpu_context, gpu_op_context, global_state,
-                  compressor, summator) {
+                  compressor) {
   if (global_state_->controller->GetRank() == 0) {
     LOG(INFO) << "NCCL_Allreduce_ScatterAllgather";
   }
@@ -60,22 +60,7 @@ Status NCCL_Allreduce_ScatterAllgather::Init(
   gradients_recv_ = gradients_send_ + chunk_size * (world_size - 1);
   decompress_buffer_ = gradients_recv_ + chunk_size * (world_size - 1);
 
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
-    return status;
-  }
-  status = error_feedback_.Init(entries);
-  if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
-    return status;
-  }
-  initialized_ = true;
-  return Status::OK();
+  return Reducer::Init(entries);
 }
 
 Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
@@ -106,9 +91,9 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     }
     int start_offset = offsets[node_rank];
     send_num_elems = chunk_sizes[node_rank];
-    send_compressed_size = ALIGNED_SIZE(compressor_->Compress(
-        send_buf, entries, error_feedback_, start_offset, global_offset,
-        send_num_elems, true, false, stream_));
+    send_compressed_size = ALIGNED_SIZE(
+        compressor_->Compress(send_buf, entries, start_offset, global_offset,
+                              send_num_elems, true, false, stream_));
     send_buf += send_compressed_size;
     send_sizes.push(send_compressed_size);
   }
@@ -148,8 +133,8 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     recv_buf += recv_compressed_size;
   }
 
-  compressor_->Compress(gradients_send_, entries, error_feedback_, start_elem,
-                        global_offset, recv_num_elems, false, true, stream_);
+  compressor_->Compress(gradients_send_, entries, start_elem, global_offset,
+                        recv_num_elems, false, true, stream_);
   compressor_->Decompress(gradients_send_, entries, start_elem, global_offset,
                           recv_num_elems, false, stream_);
   if (timeline.Initialized()) {

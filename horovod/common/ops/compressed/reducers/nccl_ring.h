@@ -11,8 +11,7 @@ class NCCL_Allreduce_Ring : public NCCLReducer {
 public:
   NCCL_Allreduce_Ring(NCCLContext* nccl_context, GPUContext* gpu_context,
                       GPUOpContext* gpu_op_context,
-                      HorovodGlobalState* global_state, Compressor* compressor,
-                      Summator* summator);
+                      HorovodGlobalState* global_state, Compressor* compressor);
   Status
   Init(const std::vector<horovod::common::TensorTableEntry>& entries) final;
   Status

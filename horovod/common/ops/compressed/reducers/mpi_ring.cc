@@ -7,9 +7,8 @@ namespace common {
 MPI_Allreduce_Ring::MPI_Allreduce_Ring(MPIContext* mpi_context,
                                        GPUContext* gpu_context,
                                        HorovodGlobalState* global_state,
-                                       Compressor* compressor,
-                                       Summator* summator)
-    : MPIReducer(mpi_context, gpu_context, global_state, compressor, summator) {
+                                       Compressor* compressor)
+    : MPIReducer(mpi_context, gpu_context, global_state, compressor) {
   if (global_state_->controller->GetRank() == 0) {
     LOG(INFO) << "Ring";
   }
@@ -50,16 +49,7 @@ Status MPI_Allreduce_Ring::Init(
   gradients_send_ = (unsigned char*)buffer_data;
   gradients_recv_ = gradients_send_ + chunk_size * world_size;
   decompress_buffer_ = gradients_recv_ + chunk_size;
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
-  status = error_feedback_.Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
-  initialized_ = true;
-  return Status::OK();
+  return Reducer::Init(entries);
 }
 
 Status MPI_Allreduce_Ring::AllreduceDivision(
@@ -95,7 +85,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
     MPI_CHECK(MPI_Irecv(gradients_recv_, recv_size, MPI_UNSIGNED_CHAR,
                         recv_from, 0, comm_, &recv_req));
     send_size = ALIGNED_SIZE(compressor_->Compress(
-        gradients_send_, entries, error_feedback_, buf_send_idx, global_offset,
+        gradients_send_, entries, buf_send_idx, global_offset,
         chunk_sizes[send_segment_idx], i == 0, false, (void*)&stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     MPI_CHECK(MPI_Send(gradients_send_, send_size, MPI_UNSIGNED_CHAR, send_to,
@@ -113,7 +103,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   buf_send_idx = offsets[send_segment_idx];
   unsigned char* send_buf = gradients_send_;
   send_size = ALIGNED_SIZE(compressor_->Compress(
-      send_buf, entries, error_feedback_, buf_send_idx, global_offset,
+      send_buf, entries, buf_send_idx, global_offset,
       chunk_sizes[send_segment_idx], false, true, (void*)&stream));
   compressor_->Decompress(send_buf, entries, buf_send_idx, global_offset,
                           chunk_sizes[send_segment_idx], false, (void*)&stream);

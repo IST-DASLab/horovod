@@ -6,9 +6,8 @@ namespace common {
 
 MPI_Allreduce_ScatterReduceAllgather::MPI_Allreduce_ScatterReduceAllgather(
     MPIContext* mpi_context, GPUContext* gpu_context,
-    HorovodGlobalState* global_state, Compressor* compressor,
-    Summator* summator)
-    : MPIReducer(mpi_context, gpu_context, global_state, compressor, summator) {
+    HorovodGlobalState* global_state, Compressor* compressor)
+    : MPIReducer(mpi_context, gpu_context, global_state, compressor) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "ScatterAllgather";
   }
@@ -56,22 +55,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::Init(
   gradients_send_ = (unsigned char*)buffer_data;
   gradients_recv_ = gradients_send_ + chunk_size * (world_size - 1);
   decompress_buffer_ = gradients_recv_ + chunk_size * (world_size - 1);
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
-    return status;
-  }
-  status = error_feedback_.Init(entries);
-  if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
-    return status;
-  }
-  initialized_ = true;
-  return Status::OK();
+  return Reducer::Init(entries);
 }
 
 Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
@@ -106,13 +90,12 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     int64_t start_offset = offsets[node_rank];
     send_num_elems = chunk_sizes[node_rank];
     send_compressed_size = ALIGNED_SIZE(compressor_->Compress(
-        send_buf, entries, error_feedback_, start_offset, global_offset,
+        send_buf, entries, start_offset, global_offset,
         send_num_elems, true, false, &stream));
     send_buf += send_compressed_size;
     send_sizes.push(send_compressed_size);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  compressor_->Finalize();
   timeline.ActivityEndAll(entries);
 
   send_buf = gradients_send_;
@@ -156,12 +139,11 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   timeline.ActivityEndAll(entries);
   // End of the first round.
 
-  compressor_->Compress(gradients_send_, entries, error_feedback_, start_elem,
+  compressor_->Compress(gradients_send_, entries, start_elem,
                         global_offset, recv_num_elems, false, true, &stream);
   cudaStreamSynchronize(stream);
   compressor_->Decompress(gradients_send_, entries, start_elem, global_offset,
                           recv_num_elems, false, &stream);
-  compressor_->Finalize();
   recv_buf = gradients_recv_;
 
   timeline.ActivityStartAll(entries, Q_NETWORK);
@@ -208,7 +190,6 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   timeline.ActivityEndAll(entries);
   MPI_CHECK(MPI_Waitall((int)send_requests.size(), send_requests.data(),
                         MPI_STATUSES_IGNORE));
-  compressor_->Finalize();
   CUDA_CHECK(cudaStreamSynchronize(stream));
   return Status::OK();
 }

@@ -10,8 +10,8 @@ namespace common {
 SHM_Allreduce_ScatterReduceAllgather::SHM_Allreduce_ScatterReduceAllgather(
     MPIContext* mpi_context, GPUContext* gpu_context,
     HorovodGlobalState* global_state, Compressor* compressor,
-    Summator* summator, CommunicatorType comm_type)
-    : SHMReducer(mpi_context, gpu_context, global_state, compressor, summator,
+    CommunicatorType comm_type)
+    : SHMReducer(mpi_context, gpu_context, global_state, compressor,
                  comm_type) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "SHM_SRA";
@@ -22,7 +22,8 @@ SHM_Allreduce_ScatterReduceAllgather::SHM_Allreduce_ScatterReduceAllgather(
 size_t SHM_Allreduce_ScatterReduceAllgather::GetRequiredFreeSize() {
   int world_size = global_state_->controller->GetSize();
   size_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
-  return chunk_size * (world_size - 1) + chunk_size * (world_size - 1) + 2 * chunk_size * world_size;
+  return chunk_size * (world_size - 1) + chunk_size * (world_size - 1) +
+         2 * chunk_size * world_size;
 }
 
 Status SHM_Allreduce_ScatterReduceAllgather::Init(
@@ -58,22 +59,6 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
   gradients_send_ = (unsigned char*)buffer_data;
   gradients_recv_ = gradients_send_ + chunk_size * world_size;
 
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
-    return status;
-  }
-
-  status = error_feedback_.Init(entries);
-  if (!status.ok()) {
-    for (auto& e : entries) {
-      e.callback(status);
-    }
-    return status;
-  }
-
   // Initialize shared memory
   if (hcomm_ == nullptr) {
     int rank = global_state_->controller->GetRank();
@@ -106,8 +91,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
           cudaEventCreateWithFlags(&events_.back(), cudaEventDisableTiming));
     }
   }
-  initialized_ = true;
-  return Status::OK();
+  return Reducer::Init(entries);
 }
 
 Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
@@ -139,7 +123,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     send_num_elems = chunk_sizes[node_rank];
 
     compressed_size = ALIGNED_SIZE(compressor_->Compress(
-        compressed_buf, entries, error_feedback_, start_offset, global_offset,
+        compressed_buf, entries, start_offset, global_offset,
         send_num_elems, true, false, &streams_[node_rank]));
 
     hcomm_->Send(compressed_buf, compressed_size, node_rank,
@@ -195,7 +179,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   }
 
   // Second round of SRA.
-  compressor_->Compress(compressed_buf, entries, error_feedback_, start_elem,
+  compressor_->Compress(compressed_buf, entries, start_elem,
                         global_offset, recv_num_elems, false, true,
                         &streams_[rank]);
   CUDA_CHECK(cudaEventRecord(events_[rank], streams_[rank]));

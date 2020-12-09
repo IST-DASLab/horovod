@@ -7,10 +7,11 @@ namespace horovod {
 namespace common {
 class NCCL_Allreduce_ScatterAllgather : public NCCLReducer {
 public:
-  NCCL_Allreduce_ScatterAllgather(NCCLContext* nccl_context, GPUContext* gpu_context,
-                           GPUOpContext* gpu_op_context,
-                           HorovodGlobalState* global_state,
-                           Compressor* compressor, Summator* summator);
+  NCCL_Allreduce_ScatterAllgather(NCCLContext* nccl_context,
+                                  GPUContext* gpu_context,
+                                  GPUOpContext* gpu_op_context,
+                                  HorovodGlobalState* global_state,
+                                  Compressor* compressor);
   Status
   Init(const std::vector<horovod::common::TensorTableEntry>& entries) final;
   Status

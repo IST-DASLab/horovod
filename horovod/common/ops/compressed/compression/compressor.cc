@@ -29,8 +29,9 @@ void Compressor::SetQuantizationLevels(float* levels, int bits) {
 
 size_t Compressor::GetRequiredFreeSize() { return 0; }
 
-Compressor::Compressor(HorovodGlobalState* global_state)
-    : global_state_(global_state), initialized_(false) {
+Compressor::Compressor(HorovodGlobalState* global_state, Summator* summator)
+    : global_state_(global_state), initialized_(false),
+      error_feedback_(summator) {
   default_config.bucket_size = GetIntEnvOrDefault(
       HOROVOD_COMPRESSION_BUCKET_SIZE, COMPRESSION_BUCKET_SIZE);
   default_config.skip_incomplete_buckets = false;
@@ -40,6 +41,12 @@ Compressor::Compressor(HorovodGlobalState* global_state)
   if (config_filename != nullptr) {
     ParseYaml(config_filename);
   }
+}
+
+Status Compressor::Init(const std::vector<TensorTableEntry>& entries) {
+  error_feedback_.Init(entries);
+  initialized_ = true;
+  return Status::OK();
 }
 
 CompressionModuleConfig& Compressor::GetModuleConfig(const std::string& name) {
@@ -118,14 +125,14 @@ int64_t Compressor::BufferSize(
 int64_t Compressor::Compress(
     unsigned char* input_data, unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
-    ErrorFeedback& error_feedback, int64_t fusion_offset, int64_t global_offset,
-    int64_t chunk_num_elems, bool disable_error_feedback, void* ctx) {
+    int64_t fusion_offset, int64_t global_offset, int64_t chunk_num_elems,
+    bool disable_error_feedback, void* ctx) {
   int64_t total_compressed_size = 0;
   auto dtype = entries[0].tensor->dtype();
   if (entries.size() == 1) {
     unsigned char* feedback_data = nullptr;
-    if (!disable_error_feedback && error_feedback.isEnabled())
-      feedback_data = error_feedback.GetData(entries[0]) +
+    if (!disable_error_feedback && error_feedback_.isEnabled())
+      feedback_data = error_feedback_.GetData(entries[0]) +
                       (global_offset + fusion_offset) * get_sizeof(dtype);
 
     total_compressed_size =
@@ -163,8 +170,8 @@ int64_t Compressor::Compress(
       buffer_offset = std::max(offset_cumm - fusion_offset, 0l);
       auto offset = buffer_offset * get_sizeof(dtype);
       unsigned char* feedback_data = nullptr;
-      if (!disable_error_feedback && error_feedback.isEnabled())
-        feedback_data = error_feedback.GetData(entry) + offset;
+      if (!disable_error_feedback && error_feedback_.isEnabled())
+        feedback_data = error_feedback_.GetData(entry) + offset;
       compressed_size =
           Compress(input_data + offset, feedback_data, output, nelem, dtype,
                    GetModuleConfig(entry.tensor_name), ctx);
@@ -225,9 +232,8 @@ void Compressor::Decompress(unsigned char* input_data,
 int64_t Compressor::Compress(
     unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
-    ErrorFeedback& error_feedback, int64_t fusion_offset, int64_t global_offset,
-    int64_t chunk_num_elems, bool original, bool disable_error_feedback,
-    void* ctx) {
+    int64_t fusion_offset, int64_t global_offset, int64_t chunk_num_elems,
+    bool original, bool disable_error_feedback, void* ctx) {
   auto get_tensor_data =
       [original](const horovod::common::TensorTableEntry& entry) {
         if (original)
@@ -241,8 +247,8 @@ int64_t Compressor::Compress(
   if (entries.size() == 1) {
     auto offset = (fusion_offset + global_offset) * get_sizeof(dtype);
     unsigned char* feedback_data = nullptr;
-    if (!disable_error_feedback && error_feedback.isEnabled())
-      feedback_data = error_feedback.GetData(entries[0]) + offset;
+    if (!disable_error_feedback && error_feedback_.isEnabled())
+      feedback_data = error_feedback_.GetData(entries[0]) + offset;
     total_compressed_size = Compress(
         get_tensor_data(entries[0]) + offset, output, feedback_data,
         chunk_num_elems, dtype, GetModuleConfig(entries[0].tensor_name), ctx);
@@ -280,8 +286,8 @@ int64_t Compressor::Compress(
       auto tensor_data = get_tensor_data(entry) + offset;
       unsigned char* feedback_data = nullptr;
 
-      if (!disable_error_feedback && error_feedback.isEnabled())
-        feedback_data = error_feedback.GetData(entry) + offset;
+      if (!disable_error_feedback && error_feedback_.isEnabled())
+        feedback_data = error_feedback_.GetData(entry) + offset;
       compressed_size =
           Compress(tensor_data, output, feedback_data, nelem, dtype,
                    GetModuleConfig(entry.tensor_name), ctx);
@@ -290,7 +296,6 @@ int64_t Compressor::Compress(
       total_compressed_size += compressed_size;
     }
   }
-  //  Finalize();
   return total_compressed_size;
 }
 
@@ -343,10 +348,7 @@ void Compressor::Decompress(
       offset_cumm += entry.tensor->shape().num_elements();
     }
   }
-  //  Finalize();
 }
-
-void Compressor::Finalize() {}
 
 // ================
 // Dummy Compressor
@@ -387,8 +389,8 @@ void CPUDummyCompressor::Decompress(
 // Quantizers
 // ================
 Quantizer::Quantizer(horovod::common::HorovodGlobalState* global_state,
-                     int quantization_bits)
-    : Compressor(global_state) {
+                     Summator* summator, int quantization_bits)
+    : Compressor(global_state, summator) {
   default_config.quantization_bits = quantization_bits;
 }
 
@@ -572,8 +574,7 @@ Status CPUNormalizedQuantizer::Init(
                      levels_type_);
     }
   }
-  initialized_ = true;
-  return Status::OK();
+  return Compressor::Init(entries);
 }
 
 inline int64_t CPUNormalizedQuantizer::BufferSize(

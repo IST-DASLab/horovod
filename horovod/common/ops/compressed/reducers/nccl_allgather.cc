@@ -7,9 +7,9 @@ namespace common {
 NCCL_Allreduce_AllGather::NCCL_Allreduce_AllGather(
     NCCLContext* nccl_context, GPUContext* gpu_context,
     GPUOpContext* gpu_op_context, HorovodGlobalState* global_state,
-    Compressor* compressor, Summator* summator)
+    Compressor* compressor)
     : NCCLReducer(nccl_context, gpu_context, gpu_op_context, global_state,
-                  compressor, summator) {
+                  compressor) {
   if (global_state_->controller->GetRank() == 0) {
     LOG(INFO) << "NCCL_Allreduce_AllGather";
   }
@@ -50,13 +50,7 @@ Status NCCL_Allreduce_AllGather::Init(
   stream_ =
       &gpu_context_
            ->streams[global_state_->current_nccl_stream][entries[0].device];
-
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
-  status = error_feedback_.Init(entries);
-  return status;
+  return Reducer::Init(entries);
 }
 
 Status NCCL_Allreduce_AllGather::AllreduceDivision(
@@ -68,7 +62,7 @@ Status NCCL_Allreduce_AllGather::AllreduceDivision(
   int64_t send_rcv_size =
       compressor_->BufferSize(num_elements, entries, 0, global_offset);
   unsigned char* send_buf = gradients_recv_ + rank * send_rcv_size;
-  compressor_->Compress(send_buf, entries, error_feedback_, 0, global_offset,
+  compressor_->Compress(send_buf, entries, 0, global_offset,
                         num_elements, true, false, stream_);
   if (global_state_->timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_COMPRESSION,

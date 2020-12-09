@@ -47,8 +47,10 @@ GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
 }
 
 Status GPUDummyCompressor::Init(const std::vector<TensorTableEntry>& entries) {
-  initialized_ = true;
-  return gpu_compression_context_->Init(entries);
+  auto status = gpu_compression_context_->Init(entries);
+  if (!status.ok())
+    return status;
+  return Compressor::Init(entries);
 }
 
 int64_t GPUDummyCompressor::Compress(
@@ -81,15 +83,16 @@ void GPUDummyCompressor::Decompress(
   }
 }
 
-void GPUDummyCompressor::Finalize() {}
 // ================
 // Max Min Quantizer
 // ================
 
 Status GPUMaxMinQuantizer::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
-  initialized_ = true;
-  return gpu_compression_context_->Init(entries);
+  auto status = gpu_compression_context_->Init(entries);
+  if (!status.ok())
+    return status;
+  return Compressor::Init(entries);
 }
 
 size_t GPUMaxMinQuantizer::GetRequiredFreeSize() {
@@ -220,8 +223,6 @@ GPUMaxMinQuantizer::BufferSize(int num_elems, DataType dtype,
          residuals * get_sizeof(dtype);
 }
 
-void GPUMaxMinQuantizer::Finalize() {}
-
 // ================
 // Normalized Quantizers
 // ================
@@ -235,7 +236,9 @@ size_t GPUNormalizedQuantizer::GetRequiredFreeSize() {
 
 Status GPUNormalizedQuantizer::Init(
     const std::vector<horovod::common::TensorTableEntry>& entries) {
-  gpu_compression_context_->Init(entries);
+  auto status = gpu_compression_context_->Init(entries);
+  if (!status.ok())
+    return status;
   for (auto& entry : entries) {
     auto& config = GetModuleConfig(entry.tensor_name);
     if (bits_to_levels_.find(config.quantization_bits) ==
@@ -265,8 +268,7 @@ Status GPUNormalizedQuantizer::Init(
       delete[] host_levels;
     }
   }
-  initialized_ = true;
-  return Status::OK();
+  return Compressor::Init(entries);
 }
 
 void GPUNormalizedQuantizer::SetQuantizationLevels(float* levels, int bits) {
@@ -298,8 +300,6 @@ void GPUNormalizedQuantizer::SetQuantizationLevels(float* levels, int bits) {
   bits_to_levels_[bits] = copy_levels;
   bits_to_levels_fp16_[bits] = copy_levels_fp16;
 }
-
-void GPUNormalizedQuantizer::Finalize() {}
 
 inline int64_t GPUNormalizedQuantizer::BufferSize(
     int num_elems, DataType dtype,

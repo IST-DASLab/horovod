@@ -18,7 +18,7 @@ struct CompressionModuleConfig {
 
 class Compressor {
 public:
-  Compressor(HorovodGlobalState* global_state);
+  Compressor(HorovodGlobalState* global_state, Summator* summator);
   // Returns size of buffer to allocate for usage in compress (in bytes). We
   // assume that no compression will be done in-place.
   virtual ~Compressor() = default;
@@ -45,7 +45,7 @@ public:
   // data.
   int64_t Compress(unsigned char* input_data, unsigned char* output,
                    const std::vector<TensorTableEntry>& entries,
-                   ErrorFeedback& error_feedback, int64_t fusion_offset,
+                   int64_t fusion_offset,
                    int64_t global_offset, int64_t chunk_num_elems,
                    bool disable_error_feedback, void* ctx);
   // Decompresses input_data into output.
@@ -58,7 +58,7 @@ public:
   // tensor or output.
   int64_t Compress(unsigned char* output,
                    const std::vector<TensorTableEntry>& entries,
-                   ErrorFeedback& error_feedback, int64_t fusion_offset,
+                   int64_t fusion_offset,
                    int64_t global_offset, int64_t chunk_num_elems,
                    bool original, bool disable_error_feedback, void* ctx);
   // Decompresses input_data into entries.
@@ -67,8 +67,7 @@ public:
                   int64_t fusion_offset, int64_t global_offset,
                   int64_t chunk_num_elems, bool add, void* ctx);
 
-  virtual void Finalize();
-  virtual Status Init(const std::vector<TensorTableEntry>& entries) = 0;
+  virtual Status Init(const std::vector<TensorTableEntry>& entries);
   virtual void SetQuantizationLevels(float* levels, int bits);
   using map_compresion_configs =
       std::unordered_map<std::string, CompressionModuleConfig>;
@@ -80,7 +79,11 @@ public:
                                   std::vector<int>& offsets,
                                   std::vector<int>& sizes);
   virtual size_t GetRequiredFreeSize();
-  bool isInitialized() { return initialized_;}
+  bool isInitialized() { return initialized_; }
+  void ApplyErrorFeedback(std::vector<TensorTableEntry>& entries) {
+    error_feedback_.Apply(entries);
+  }
+
 protected:
   const int MIN_SIZE_TO_COMPRESS = 16;
   // The size of the bucket.
@@ -89,6 +92,8 @@ protected:
   CompressionModuleConfig default_config;
   CompressionModuleConfig& GetModuleConfig(const std::string& name);
   bool initialized_;
+  ErrorFeedback error_feedback_;
+
 private:
   void ParseYaml(const char* file);
   map_compresion_configs modules_configs;
@@ -97,21 +102,18 @@ private:
 
 class DummyCompressor : public Compressor {
 public:
-  DummyCompressor(horovod::common::HorovodGlobalState* global_state)
-      : Compressor(global_state) {}
+  DummyCompressor(horovod::common::HorovodGlobalState* global_state,
+                  Summator* summator)
+      : Compressor(global_state, summator) {}
 
   int64_t BufferSize(int num_elems, DataType dtype,
                      const CompressionModuleConfig& compression_cfg) final;
-
-  Status Init(const std::vector<TensorTableEntry>& entries) override {
-    return Status::OK();
-  }
 };
 
 class CPUDummyCompressor : public DummyCompressor {
 public:
-  CPUDummyCompressor(HorovodGlobalState* global_state)
-      : DummyCompressor(global_state) {}
+  CPUDummyCompressor(HorovodGlobalState* global_state, Summator* summator)
+      : DummyCompressor(global_state, summator) {}
 
   int64_t Compress(unsigned char* input_data, unsigned char* output,
                    unsigned char* feedback_data, int64_t num_elems,
@@ -140,11 +142,9 @@ private:
 
 class Quantizer : public Compressor {
 public:
-  Quantizer(HorovodGlobalState* global_state, int quantization_bits);
+  Quantizer(HorovodGlobalState* global_state, Summator* summator,
+            int quantization_bits);
 
-  Status Init(const std::vector<TensorTableEntry>& entries) override {
-    return Status::OK();
-  }
   virtual void GetSizesAndOffsets(int num_elements, int world_size,
                                   const std::vector<TensorTableEntry>& entries,
                                   std::vector<int>& offsets,
@@ -153,14 +153,16 @@ public:
 
 class MaxMinQuantizer : public Quantizer {
 public:
-  MaxMinQuantizer(HorovodGlobalState* global_state, int quantization_bits)
-      : Quantizer(global_state, quantization_bits) {}
+  MaxMinQuantizer(HorovodGlobalState* global_state, Summator* summator,
+                  int quantization_bits)
+      : Quantizer(global_state, summator, quantization_bits) {}
 };
 
 class CPUMaxMinQuantizer : public MaxMinQuantizer {
 public:
-  CPUMaxMinQuantizer(HorovodGlobalState* global_state, int quantization_bits)
-      : MaxMinQuantizer(global_state, quantization_bits) {}
+  CPUMaxMinQuantizer(HorovodGlobalState* global_state, Summator* summator,
+                     int quantization_bits)
+      : MaxMinQuantizer(global_state, summator, quantization_bits) {}
   int64_t Compress(unsigned char* input_data, unsigned char* output,
                    unsigned char* feedback_data, int64_t num_elems,
                    DataType dtype,
@@ -190,9 +192,10 @@ private:
 class NormalizedQuantizer : public Quantizer {
 public:
   NormalizedQuantizer(horovod::common::HorovodGlobalState* global_state,
-                      int quantization_bits, CompressionType compression_type,
-                      NormType norm_type, LevelsType levels_type)
-      : Quantizer(global_state, quantization_bits),
+                      Summator* summator, int quantization_bits,
+                      CompressionType compression_type, NormType norm_type,
+                      LevelsType levels_type)
+      : Quantizer(global_state, summator, quantization_bits),
         compression_type_(compression_type), norm_type_(norm_type),
         levels_type_(levels_type) {}
 
@@ -209,11 +212,11 @@ protected:
 class CPUNormalizedQuantizer : public NormalizedQuantizer {
 public:
   CPUNormalizedQuantizer(horovod::common::HorovodGlobalState* global_state,
-                         int quantization_bits,
+                         Summator* summator, int quantization_bits,
                          CompressionType compression_type, NormType norm_type,
                          LevelsType levels_type)
-      : NormalizedQuantizer(global_state, quantization_bits, compression_type,
-                            norm_type, levels_type) {}
+      : NormalizedQuantizer(global_state, summator, quantization_bits,
+                            compression_type, norm_type, levels_type) {}
   Status
   Init(const std::vector<horovod::common::TensorTableEntry>& entries) override;
   int64_t Compress(unsigned char* input_data, unsigned char* output,

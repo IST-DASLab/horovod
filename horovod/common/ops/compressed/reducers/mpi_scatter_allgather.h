@@ -27,8 +27,7 @@ public:
   MPI_Allreduce_ScatterReduceAllgather(MPIContext* mpi_context,
                                        GPUContext* gpu_context,
                                        HorovodGlobalState* global_state,
-                                       Compressor* compressor,
-                                       Summator* summator);
+                                       Compressor* compressor);
 
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,

@@ -28,41 +28,42 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
   auto levels_type = GetEnumEnvOrDefault<LevelsType>(
       HOROVOD_COMPRESSION_LEVELS_TYPE, LevelsType::Pos);
   auto quantization_bits = GetIntEnvOrDefault(HOROVOD_QUANTIZATION_BITS, 32);
+  auto summator = new CPUSummator();
   if (quantization_bits == 32 ||
       compression_type == CompressionType::NoneCompression) {
-    compressor_ = new CPUDummyCompressor(global_state);
+    compressor_ = new CPUDummyCompressor(global_state, summator);
   } else {
     switch (compression_type) {
     case CompressionType::MaxMin:
-      compressor_ = new CPUMaxMinQuantizer(global_state, quantization_bits);
+      compressor_ =
+          new CPUMaxMinQuantizer(global_state, summator, quantization_bits);
       break;
     case CompressionType::Exp:
     case CompressionType::Uni:
       compressor_ =
-          new CPUNormalizedQuantizer(global_state, quantization_bits,
+          new CPUNormalizedQuantizer(global_state, summator, quantization_bits,
                                      compression_type, norm_type, levels_type);
       break;
     default:
       throw std::logic_error("Invalid compression type.");
     }
   }
-  auto summator = new CPUSummator();
   switch (reduction_type) {
   case ReductionType::AllGather:
-    reducer_ = new MPI_Allreduce_AllGather(
-        mpi_context, gpu_context, global_state, compressor_, summator);
+    reducer_ = new MPI_Allreduce_AllGather(mpi_context, gpu_context,
+                                           global_state, compressor_);
     break;
   case ReductionType::Ring:
     reducer_ = new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state,
-                                        compressor_, summator);
+                                      compressor_);
     break;
   case ReductionType::ScatterAllgather:
     reducer_ = new MPI_Allreduce_ScatterReduceAllgather(
-        mpi_context, gpu_context, global_state, compressor_, summator);
+        mpi_context, gpu_context, global_state, compressor_);
     break;
   case ReductionType::PS:
     reducer_ = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
-                                      compressor_, summator);
+                                    compressor_);
     break;
   default:
     reducer_ = nullptr;
@@ -79,7 +80,7 @@ Status MPI_CompressedAllReduce::Allreduce(
   if (!status.ok()) {
     return status;
   }
-  reducer_->ApplyErrorFeedback(entries);
+  compressor_->ApplyErrorFeedback(entries);
   int64_t tensor_fusion_threshold =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
   if (buffer_len > tensor_fusion_threshold) {
@@ -94,7 +95,7 @@ Status MPI_CompressedAllReduce::Allreduce(
               ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
               : tensor_fusion_threshold / sizeof(float);
       status = reducer_->AllreduceDivision(num_elements_division, entries,
-                                             global_offset);
+                                           global_offset);
       if (!status.ok())
         break;
       global_offset += (tensor_fusion_threshold / sizeof(float));
@@ -135,7 +136,6 @@ bool MPI_CompressedAllReduce::EnabledName(const std::string& name) const {
   }
   return true;
 }
-
 
 bool MPI_CompressedAllReduce::Enabled(
     const horovod::common::ParameterManager& param_manager,

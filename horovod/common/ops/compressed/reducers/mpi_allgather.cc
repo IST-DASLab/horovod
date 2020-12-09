@@ -6,9 +6,8 @@ namespace common {
 
 MPI_Allreduce_AllGather::MPI_Allreduce_AllGather(
     MPIContext* mpi_context, GPUContext* gpu_context,
-    HorovodGlobalState* global_state, Compressor* compressor,
-    Summator* summator)
-    : MPIReducer(mpi_context, gpu_context, global_state, compressor, summator) {
+    HorovodGlobalState* global_state, Compressor* compressor)
+    : MPIReducer(mpi_context, gpu_context, global_state, compressor) {
   if (global_state->controller->GetLocalRank() == 0) {
     LOG(INFO) << "AllGather";
   }
@@ -52,13 +51,7 @@ MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries,
   gradients_send_ = (unsigned char*)buffer_data;
   gradients_recv_ = (unsigned char*)gradients_send_ + chunk_size;
   decompress_buffer_ = gradients_recv_ + chunk_size * (world_size - 1);
-  status = compressor_->Init(entries);
-  if (!status.ok()) {
-    return status;
-  }
-  status = error_feedback_.Init(entries);
-  initialized_ = true;
-  return status;
+  return Reducer::Init(entries);
 }
 
 Status MPI_Allreduce_AllGather::AllreduceDivision(
@@ -72,8 +65,8 @@ Status MPI_Allreduce_AllGather::AllreduceDivision(
       gpu_context_
           ->streams[global_state_->current_nccl_stream][entries[0].device];
   int64_t send_rcv_size = ALIGNED_SIZE(
-      compressor_->Compress(gradients_send_, entries, error_feedback_, 0,
-                            global_offset, num_elements, true, false, &stream));
+      compressor_->Compress(gradients_send_, entries, 0, global_offset,
+                            num_elements, true, false, &stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   timeline.ActivityEndAll(entries);
   std::vector<MPI_Request> requests;
@@ -103,7 +96,6 @@ Status MPI_Allreduce_AllGather::AllreduceDivision(
                             global_offset, num_elements, true, (void*)&stream);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  compressor_->Finalize();
   timeline.ActivityEndAll(entries);
   return Status::OK();
 }

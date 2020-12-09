@@ -33,27 +33,27 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
     reducer_ = nullptr;
     return;
   }
-  Compressor* compressor = CreateGPUCompressor(gpu_context, global_state);
+  auto summator = new GPUSummator(global_state, gpu_context);
+  Compressor* compressor = CreateGPUCompressor(gpu_context, global_state, summator);
   global_compressor = compressor;
   compressor_ = compressor;
-  auto summator = new GPUSummator(global_state, gpu_context);
   if (communicator_type == CommunicatorType::MPI) {
     switch (reduction_type) {
     case ReductionType::AllGather:
       reducer_ = new MPI_Allreduce_AllGather(
-          mpi_context, gpu_context, global_state, compressor, summator);
+          mpi_context, gpu_context, global_state, compressor);
       break;
     case ReductionType::Ring:
       reducer_ = new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state,
-                                        compressor, summator);
+                                        compressor);
       break;
     case ReductionType::ScatterAllgather:
       reducer_ = new MPI_Allreduce_ScatterReduceAllgather(
-          mpi_context, gpu_context, global_state, compressor, summator);
+          mpi_context, gpu_context, global_state, compressor);
       break;
     case ReductionType::PS:
       reducer_ = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
-                                      compressor, summator);
+                                      compressor);
       break;
     default:
       reducer_ = nullptr;
@@ -68,18 +68,18 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
     switch (reduction_type) {
     case ReductionType::ScatterAllgather:
       reducer_ = new SHM_Allreduce_ScatterReduceAllgather(
-          mpi_context, gpu_context, global_state, compressor, summator,
+          mpi_context, gpu_context, global_state, compressor,
           communicator_type);
       break;
     case ReductionType::Ring:
       reducer_ =
           new SHM_Allreduce_Ring(mpi_context, gpu_context, global_state,
-                                 compressor, summator, communicator_type);
+                                 compressor, communicator_type);
       break;
     case ReductionType::Tree:
       reducer_ =
           new SHM_Allreduce_Tree(mpi_context, gpu_context, global_state,
-                                 compressor, summator, communicator_type);
+                                 compressor, communicator_type);
       break;
     default:
       reducer_ = nullptr;
@@ -97,7 +97,7 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
   if (!status.ok()) {
     return status;
   }
-  reducer_->ApplyErrorFeedback(entries);
+  compressor_->ApplyErrorFeedback(entries);
   int64_t tensor_fusion_threshold =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
   if (buffer_len > tensor_fusion_threshold) {

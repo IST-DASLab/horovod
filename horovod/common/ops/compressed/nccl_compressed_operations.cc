@@ -14,9 +14,8 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
     HorovodGlobalState* global_state,
     horovod::common::Communicator mpi_communicator)
     : NCCLAllreduce(nccl_context, gpu_context, global_state, mpi_communicator) {
-  compressor_ = CreateGPUCompressor(gpu_context, global_state);
-
   auto summator = new GPUSummator(global_state, gpu_context);
+  compressor_ = CreateGPUCompressor(gpu_context, global_state, summator);
   auto reduction_type = GetEnumEnvOrDefault<ReductionType>(
       HOROVOD_REDUCTION, ReductionType::NoneReduction);
   auto communicator_type = GetEnumEnvOrDefault<CommunicatorType>(
@@ -30,13 +29,12 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
   case ReductionType::AllGather:
     reducer_ = new NCCL_Allreduce_AllGather(nccl_context, gpu_context,
                                            &gpu_op_context_, global_state,
-                                           compressor_, summator);
+                                           compressor_);
     break;
   case ReductionType::ScatterAllgather:
 #ifdef NCCL_P2P_SUPPORTED
     reducer_ = new NCCL_Allreduce_ScatterAllgather(
-        nccl_context, gpu_context, &gpu_op_context_, global_state, compressor_,
-        summator);
+        nccl_context, gpu_context, &gpu_op_context_, global_state, compressor_);
     break;
 #else
     throw std::logic_error("NCCL_ScatterAllgather is not supported because of "
@@ -46,7 +44,7 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
 #ifdef NCCL_P2P_SUPPORTED
     reducer_ =
         new NCCL_Allreduce_Ring(nccl_context, gpu_context, &gpu_op_context_,
-                                global_state, compressor_, summator);
+                                global_state, compressor_);
     break;
 #else
     throw std::logic_error(
@@ -68,7 +66,7 @@ Status NCCL_CompressedAllreduce::Allreduce(
   if (!status.ok()) {
     return status;
   }
-  reducer_->ApplyErrorFeedback(entries);
+  compressor_->ApplyErrorFeedback(entries);
   int64_t tensor_fusion_threshold =
       global_state_->parameter_manager.TensorFusionThresholdBytes();
   if (buffer_len > tensor_fusion_threshold) {
