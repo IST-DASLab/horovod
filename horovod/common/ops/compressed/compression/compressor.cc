@@ -37,6 +37,8 @@ Compressor::Compressor(HorovodGlobalState* global_state, Summator* summator)
   default_config.skip_incomplete_buckets = false;
   SetBoolFromEnv(HOROVOD_COMPRESSION_SKIP_INCOMPLETE_BUCKETS,
                  default_config.skip_incomplete_buckets, true);
+  compression_mode_ =
+      GetEnumEnvOrDefault(HOROVOD_COMPRESSION_MODE, CompressionMode::NonFused);
   const char* config_filename = std::getenv(HOROVOD_COMPRESSION_CONFIG_FILE);
   if (config_filename != nullptr) {
     ParseYaml(config_filename);
@@ -45,6 +47,14 @@ Compressor::Compressor(HorovodGlobalState* global_state, Summator* summator)
 
 Status Compressor::Init(const std::vector<TensorTableEntry>& entries) {
   error_feedback_.Init(entries);
+  if (compression_mode_ == CompressionMode::Fused and
+      error_feedback_.isEnabled() and fused_feedback_buf == nullptr) {
+    CUDA_CHECK(cudaMalloc(
+        &fused_feedback_buf,
+        global_state_->parameter_manager.TensorFusionThresholdBytes()));
+    cudaMemset(fused_feedback_buf, 0,
+               global_state_->parameter_manager.TensorFusionThresholdBytes());
+  }
   initialized_ = true;
   return Status::OK();
 }
@@ -80,19 +90,18 @@ void Compressor::GetSizesAndOffsets(
   }
 }
 
-int64_t Compressor::BufferSize(
+size_t Compressor::BufferSize(
     int chunk_num_elems,
     const std::vector<horovod::common::TensorTableEntry>& entries,
-    int64_t fusion_offset, int64_t global_offset) {
+    int fusion_offset) {
   auto dtype = entries[0].tensor->dtype();
-  if (entries.size() == 1) {
-    return BufferSize(chunk_num_elems, dtype,
-                      GetModuleConfig(entries[0].tensor_name));
+  if (compression_mode_ == CompressionMode::Fused) {
+    return BufferSize(chunk_num_elems, entries[0].tensor->dtype(),
+                      default_config);
   }
-
-  int64_t offset_cumm = 0;
-  int64_t nelem = 0;
-  int64_t sum_result = 0;
+  int offset_cumm = 0;
+  int nelem = 0;
+  size_t sum_result = 0;
   for (auto& entry : entries) {
     nelem = entry.tensor->shape().num_elements();
     if (offset_cumm + nelem <= fusion_offset) {
@@ -122,255 +131,271 @@ int64_t Compressor::BufferSize(
   return sum_result;
 }
 
-int64_t Compressor::Compress(
+size_t Compressor::Compress(
     unsigned char* input_data, unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
-    int64_t fusion_offset, int64_t global_offset, int64_t chunk_num_elems,
-    bool disable_error_feedback, void* ctx) {
-  int64_t total_compressed_size = 0;
+    int fusion_offset, int chunk_num_elems, bool disable_error_feedback,
+    void* ctx) {
+  CUDA_CHECK(cudaStreamSynchronize(*((cudaStream_t*)ctx)));
   auto dtype = entries[0].tensor->dtype();
-  if (entries.size() == 1) {
+  if (compression_mode_ == CompressionMode::Fused) {
+    unsigned char* feedback_data = nullptr;
+    if (!disable_error_feedback && error_feedback_.isEnabled()) {
+      if (entries.size() == 0) {
+        feedback_data = error_feedback_.GetData(entries[0]) +
+                        fusion_offset * get_sizeof(dtype);
+      } else {
+        feedback_data = fused_feedback_buf;
+      }
+    }
+    auto result = CompressBuffer(input_data + fusion_offset * get_sizeof(dtype),
+                                 output, feedback_data, chunk_num_elems, dtype,
+                                 default_config, ctx);
+    if (!disable_error_feedback && error_feedback_.isEnabled() &&
+        entries.size() > 1) {
+      error_feedback_.CopyToErrorFeedback(feedback_data, entries,
+                                          chunk_num_elems, fusion_offset, ctx);
+    }
+    return result;
+  } else if (compression_mode_ == CompressionMode::PerEntryFused or
+             input_data != nullptr) {
+    return CompressPerEntry(input_data + fusion_offset * get_sizeof(dtype),
+                            output, entries, fusion_offset, chunk_num_elems,
+                            disable_error_feedback, ctx);
+  } else {
+    return CompressFromEntries(output, entries, fusion_offset, chunk_num_elems,
+                               disable_error_feedback, ctx);
+  }
+}
+
+void Compressor::Decompress(unsigned char* input_data, unsigned char* output,
+                            const std::vector<TensorTableEntry>& entries,
+                            int fusion_offset, int chunk_num_elems, bool add,
+                            void* ctx) {
+  auto dtype = entries[0].tensor->dtype();
+  if (compression_mode_ == CompressionMode::Fused) {
+    DecompressBuffer(input_data, output + fusion_offset * get_sizeof(dtype),
+                     chunk_num_elems, dtype, add, default_config, ctx);
+  } else if (compression_mode_ == CompressionMode::PerEntryFused or
+             output != nullptr) {
+    DecompressPerEntry(input_data, output + fusion_offset * get_sizeof(dtype),
+                       entries, fusion_offset, chunk_num_elems, add, ctx);
+  } else {
+    DecompressIntoEntries(input_data, entries, fusion_offset, chunk_num_elems,
+                          add, ctx);
+  }
+}
+
+size_t Compressor::CompressPerEntry(
+    unsigned char* input_data, unsigned char* output,
+    const std::vector<horovod::common::TensorTableEntry>& entries,
+    int fusion_offset, int chunk_num_elems, bool disable_error_feedback,
+    void* ctx) {
+  size_t total_compressed_size = 0;
+  auto dtype = entries[0].tensor->dtype();
+  int offset_cumm = 0;
+  int nelem = 0;
+  int buffer_offset = 0, entry_offset = 0;
+  size_t compressed_size;
+  for (auto& entry : entries) {
+    nelem = entry.tensor->shape().num_elements();
+    entry_offset = 0;
+    if (offset_cumm + nelem <= fusion_offset) {
+      offset_cumm += nelem;
+      continue;
+    }
+
+    if (offset_cumm - fusion_offset >= chunk_num_elems) {
+      break;
+    }
+
+    if (offset_cumm < fusion_offset) {
+      // If the first part of param group is placed in previous slice
+      // depending on reduction algorithm.
+      nelem = offset_cumm + nelem - fusion_offset;
+      entry_offset = entry.tensor->shape().num_elements() - nelem;
+    }
+
+    if (std::max(offset_cumm, fusion_offset) + nelem >
+        fusion_offset + chunk_num_elems) {
+      // if layer doesn't fit the rest of slice.
+      nelem = fusion_offset + chunk_num_elems -
+              std::max(offset_cumm, fusion_offset);
+    }
+
+    buffer_offset = std::max(offset_cumm - fusion_offset, 0);
+    auto offset = buffer_offset * get_sizeof(dtype);
     unsigned char* feedback_data = nullptr;
     if (!disable_error_feedback && error_feedback_.isEnabled())
-      feedback_data = error_feedback_.GetData(entries[0]) +
-                      (global_offset + fusion_offset) * get_sizeof(dtype);
-
-    total_compressed_size =
-        Compress(input_data, output, feedback_data, chunk_num_elems, dtype,
-                 GetModuleConfig(entries[0].tensor_name), ctx);
-  } else {
-    int64_t offset_cumm = 0;
-    int64_t nelem = 0;
-    int64_t buffer_offset = 0;
-    int compressed_size;
-    for (auto& entry : entries) {
-      nelem = entry.tensor->shape().num_elements();
-      if (offset_cumm + nelem <= fusion_offset) {
-        offset_cumm += nelem;
-        continue;
-      }
-
-      if (offset_cumm - fusion_offset >= chunk_num_elems) {
-        break;
-      }
-
-      if (offset_cumm < fusion_offset) {
-        // If the first part of param group is placed in previous slice
-        // depending on reduction algorithm.
-        nelem = offset_cumm + nelem - fusion_offset;
-      }
-
-      if (std::max(offset_cumm, fusion_offset) + nelem >
-          fusion_offset + chunk_num_elems) {
-        // if layer doesn't fit the rest of slice.
-        nelem = fusion_offset + chunk_num_elems -
-                std::max(offset_cumm, fusion_offset);
-      }
-
-      buffer_offset = std::max(offset_cumm - fusion_offset, 0l);
-      auto offset = buffer_offset * get_sizeof(dtype);
-      unsigned char* feedback_data = nullptr;
-      if (!disable_error_feedback && error_feedback_.isEnabled())
-        feedback_data = error_feedback_.GetData(entry) + offset;
-      compressed_size =
-          Compress(input_data + offset, feedback_data, output, nelem, dtype,
-                   GetModuleConfig(entry.tensor_name), ctx);
-      offset_cumm += entry.tensor->shape().num_elements();
-      output += compressed_size;
-      total_compressed_size += compressed_size;
-    }
+      feedback_data =
+          error_feedback_.GetData(entry) + entry_offset * get_sizeof(dtype);
+    compressed_size =
+        CompressBuffer(input_data + offset, feedback_data, output, nelem, dtype,
+                       GetModuleConfig(entry.tensor_name), ctx);
+    offset_cumm += entry.tensor->shape().num_elements();
+    output += compressed_size;
+    total_compressed_size += compressed_size;
   }
   return total_compressed_size;
 }
 
-void Compressor::Decompress(unsigned char* input_data,
-                            unsigned char* output_data,
-                            const std::vector<TensorTableEntry>& entries,
-                            int64_t fusion_offset, int64_t chunk_num_elems,
-                            bool add, void* ctx) {
+void Compressor::DecompressPerEntry(
+    unsigned char* input_data, unsigned char* output_data,
+    const std::vector<TensorTableEntry>& entries, int fusion_offset,
+    int chunk_num_elems, bool add, void* ctx) {
   auto dtype = entries[0].tensor->dtype();
-  if (entries.size() == 1) {
-    Decompress(input_data, output_data, chunk_num_elems, dtype, add,
-               GetModuleConfig(entries[0].tensor_name), ctx);
-  } else {
-    int64_t offset_cumm = 0;
-    int64_t nelem = 0;
-    int64_t buffer_offset = 0;
-    int64_t cumm_decompressed = 0;
-    unsigned char* output;
-    for (auto& entry : entries) {
-      nelem = entry.tensor->shape().num_elements();
-      if (offset_cumm + nelem <= fusion_offset) {
-        offset_cumm += nelem;
-        continue;
-      }
-      if (offset_cumm - fusion_offset >= chunk_num_elems)
-        break;
-
-      if (offset_cumm < fusion_offset) {
-        // If the first part of param group is placed in previous slice
-        // depending on reduction algorithm.
-        nelem = offset_cumm + nelem - fusion_offset;
-      }
-      if (std::max(offset_cumm, fusion_offset) + nelem >
-          fusion_offset + chunk_num_elems) {
-        // if layer doesn't fit the rest of slice.
-        nelem = fusion_offset + chunk_num_elems -
-                std::max(offset_cumm, fusion_offset);
-      }
-      auto& module_config = GetModuleConfig(entry.tensor_name);
-      buffer_offset = std::max(offset_cumm - fusion_offset, 0l);
-      output = output_data + buffer_offset * get_sizeof(dtype);
-      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add,
-                 module_config, ctx);
-      cumm_decompressed += BufferSize(nelem, dtype, module_config);
-      offset_cumm += entry.tensor->shape().num_elements();
+  int offset_cumm = 0;
+  int nelem = 0;
+  int buffer_offset = 0;
+  size_t cumm_decompressed = 0;
+  unsigned char* output;
+  for (auto& entry : entries) {
+    nelem = entry.tensor->shape().num_elements();
+    if (offset_cumm + nelem <= fusion_offset) {
+      offset_cumm += nelem;
+      continue;
     }
+    if (offset_cumm - fusion_offset >= chunk_num_elems)
+      break;
+
+    if (offset_cumm < fusion_offset) {
+      // If the first part of param group is placed in previous slice
+      // depending on reduction algorithm.
+      nelem = offset_cumm + nelem - fusion_offset;
+    }
+    if (std::max(offset_cumm, fusion_offset) + nelem >
+        fusion_offset + chunk_num_elems) {
+      // if layer doesn't fit the rest of slice.
+      nelem = fusion_offset + chunk_num_elems -
+              std::max(offset_cumm, fusion_offset);
+    }
+    auto& module_config = GetModuleConfig(entry.tensor_name);
+    buffer_offset = std::max(offset_cumm - fusion_offset, 0);
+    output = output_data + buffer_offset * get_sizeof(dtype);
+    DecompressBuffer(input_data + cumm_decompressed, output, nelem, dtype, add,
+                     module_config, ctx);
+    cumm_decompressed += BufferSize(nelem, dtype, module_config);
+    offset_cumm += entry.tensor->shape().num_elements();
   }
 }
 
-int64_t Compressor::Compress(
+size_t Compressor::CompressFromEntries(
     unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
-    int64_t fusion_offset, int64_t global_offset, int64_t chunk_num_elems,
-    bool original, bool disable_error_feedback, void* ctx) {
-  auto get_tensor_data =
-      [original](const horovod::common::TensorTableEntry& entry) {
-        if (original)
-          return (unsigned char*)entry.tensor->data();
-        else
-          return (unsigned char*)entry.output->data();
-      };
-  int64_t total_compressed_size = 0;
+    int fusion_offset, int chunk_num_elems, bool disable_error_feedback,
+    void* ctx) {
+  size_t total_compressed_size = 0;
   auto dtype = entries[0].tensor->dtype();
 
-  if (entries.size() == 1) {
-    auto offset = (fusion_offset + global_offset) * get_sizeof(dtype);
-    unsigned char* feedback_data = nullptr;
-    if (!disable_error_feedback && error_feedback_.isEnabled())
-      feedback_data = error_feedback_.GetData(entries[0]) + offset;
-    total_compressed_size = Compress(
-        get_tensor_data(entries[0]) + offset, output, feedback_data,
-        chunk_num_elems, dtype, GetModuleConfig(entries[0].tensor_name), ctx);
-  } else {
-
-    int64_t offset_cumm = 0;
-    int64_t nelem = 0;
-    int64_t buffer_offset = 0;
-    int compressed_size;
-    for (auto& entry : entries) {
-      nelem = entry.tensor->shape().num_elements();
-      if (offset_cumm + nelem <= fusion_offset) {
-        offset_cumm += nelem;
-        continue;
-      }
-
-      if (offset_cumm - fusion_offset >= chunk_num_elems) {
-        break;
-      }
-      buffer_offset = 0;
-      if (offset_cumm < fusion_offset) {
-        // If the first part of param group is placed in previous slice
-        // depending on reduction algorithm.
-        nelem = offset_cumm + nelem - fusion_offset;
-        buffer_offset = entry.tensor->shape().num_elements() - nelem;
-      }
-
-      if (std::max(offset_cumm, fusion_offset) + nelem >
-          fusion_offset + chunk_num_elems) {
-        // if layer doesn't fit the rest of slice.
-        nelem = fusion_offset + chunk_num_elems -
-                std::max(offset_cumm, fusion_offset);
-      }
-      auto offset = buffer_offset * get_sizeof(dtype);
-      auto tensor_data = get_tensor_data(entry) + offset;
-      unsigned char* feedback_data = nullptr;
-
-      if (!disable_error_feedback && error_feedback_.isEnabled())
-        feedback_data = error_feedback_.GetData(entry) + offset;
-      compressed_size =
-          Compress(tensor_data, output, feedback_data, nelem, dtype,
-                   GetModuleConfig(entry.tensor_name), ctx);
-      offset_cumm += entry.tensor->shape().num_elements();
-      output += compressed_size;
-      total_compressed_size += compressed_size;
+  int offset_cumm = 0;
+  int nelem = 0;
+  int buffer_offset = 0;
+  size_t compressed_size;
+  for (auto& entry : entries) {
+    nelem = entry.tensor->shape().num_elements();
+    if (offset_cumm + nelem <= fusion_offset) {
+      offset_cumm += nelem;
+      continue;
     }
+
+    if (offset_cumm - fusion_offset >= chunk_num_elems) {
+      break;
+    }
+    buffer_offset = 0;
+    if (offset_cumm < fusion_offset) {
+      // If the first part of the entry is placed in the previous slice.
+      nelem = offset_cumm + nelem - fusion_offset;
+      buffer_offset = entry.tensor->shape().num_elements() - nelem;
+    }
+
+    if (std::max(offset_cumm, fusion_offset) + nelem >
+        fusion_offset + chunk_num_elems) {
+      // if entry doesn't fit the rest of slice.
+      nelem = fusion_offset + chunk_num_elems -
+              std::max(offset_cumm, fusion_offset);
+    }
+    auto offset = buffer_offset * get_sizeof(dtype);
+    auto tensor_data = ((unsigned char*)entry.output->data()) + offset;
+    unsigned char* feedback_data = nullptr;
+
+    if (!disable_error_feedback && error_feedback_.isEnabled())
+      feedback_data = error_feedback_.GetData(entry) + offset;
+    compressed_size =
+        CompressBuffer(tensor_data, output, feedback_data, nelem, dtype,
+                       GetModuleConfig(entry.tensor_name), ctx);
+    offset_cumm += entry.tensor->shape().num_elements();
+    output += compressed_size;
+    total_compressed_size += compressed_size;
   }
   return total_compressed_size;
 }
 
-void Compressor::Decompress(
+void Compressor::DecompressIntoEntries(
     unsigned char* input_data,
     const std::vector<horovod::common::TensorTableEntry>& entries,
-    int64_t fusion_offset, int64_t global_offset, int64_t chunk_num_elems,
-    bool add, void* ctx) {
-  auto dtype = entries[0].tensor->dtype();
-  if (entries.size() == 1) {
-    Decompress(input_data,
-               ((unsigned char*)entries[0].output->data()) +
-                   fusion_offset * get_sizeof(dtype) +
-                   global_offset * get_sizeof(dtype),
-               chunk_num_elems, dtype, add,
-               GetModuleConfig(entries[0].tensor_name), ctx);
-  } else {
-    int64_t offset_cumm = 0;
-    int64_t nelem = 0;
-    int64_t buffer_offset = 0;
-    int64_t cumm_decompressed = 0;
+    int fusion_offset, int chunk_num_elems, bool add, void* ctx) {
+  auto dtype = entries[0].output->dtype();
+  int offset_cumm = 0;
+  int nelem = 0;
+  int buffer_offset = 0;
+  size_t cumm_decompressed = 0;
 
-    for (auto& entry : entries) {
-      nelem = entry.tensor->shape().num_elements();
-      if (offset_cumm + nelem <= fusion_offset) {
-        offset_cumm += nelem;
-        continue;
-      }
-      if (offset_cumm - fusion_offset >= chunk_num_elems)
-        break;
-      buffer_offset = 0;
-      if (offset_cumm < fusion_offset) {
-        // If the first part of param group is placed in previous slice
-        // depending on reduction algorithm.
-        nelem = offset_cumm + nelem - fusion_offset;
-        buffer_offset = entry.tensor->shape().num_elements() - nelem;
-      }
-      if (std::max(offset_cumm, fusion_offset) + nelem >
-          fusion_offset + chunk_num_elems) {
-        // if layer doesn't fit the rest of slice.
-        nelem = fusion_offset + chunk_num_elems -
-                std::max(offset_cumm, fusion_offset);
-      }
-      auto output = ((unsigned char*)entry.output->data()) +
-                    buffer_offset * get_sizeof(dtype);
-      const auto& module_config = GetModuleConfig(entry.tensor_name);
-      Decompress(input_data + cumm_decompressed, output, nelem, dtype, add,
-                 module_config, ctx);
-      cumm_decompressed += BufferSize(nelem, dtype, module_config);
-      offset_cumm += entry.tensor->shape().num_elements();
+  for (auto& entry : entries) {
+    nelem = entry.tensor->shape().num_elements();
+    if (offset_cumm + nelem <= fusion_offset) {
+      offset_cumm += nelem;
+      continue;
     }
+    if (offset_cumm - fusion_offset >= chunk_num_elems)
+      break;
+    buffer_offset = 0;
+    if (offset_cumm < fusion_offset) {
+      // If the first part of param group is placed in previous slice
+      // depending on reduction algorithm.
+      nelem = offset_cumm + nelem - fusion_offset;
+      buffer_offset = entry.tensor->shape().num_elements() - nelem;
+    }
+    if (std::max(offset_cumm, fusion_offset) + nelem >
+        fusion_offset + chunk_num_elems) {
+      // if layer doesn't fit the rest of slice.
+      nelem = fusion_offset + chunk_num_elems -
+              std::max(offset_cumm, fusion_offset);
+    }
+    auto output = ((unsigned char*)entry.output->data()) +
+                  buffer_offset * get_sizeof(dtype);
+    const auto& module_config = GetModuleConfig(entry.tensor_name);
+    DecompressBuffer(input_data + cumm_decompressed, output, nelem, dtype, add,
+                     module_config, ctx);
+    cumm_decompressed += BufferSize(nelem, dtype, module_config);
+    offset_cumm += entry.tensor->shape().num_elements();
   }
+}
+
+void Compressor::ApplyErrorFeedback(std::vector<TensorTableEntry>& entries) {
+  error_feedback_.Apply(entries);
 }
 
 // ================
 // Dummy Compressor
 // ================
-int64_t
+size_t
 DummyCompressor::BufferSize(int num_elems, horovod::common::DataType dtype,
                             const CompressionModuleConfig& compression_cfg) {
   return num_elems * get_sizeof(dtype);
 }
 
-int64_t CPUDummyCompressor::Compress(
+size_t CPUDummyCompressor::CompressBuffer(
     unsigned char* input_data, unsigned char* output,
-    unsigned char* feedback_data, int64_t num_elems, DataType dtype,
+    unsigned char* feedback_data, int num_elems, DataType dtype,
     const CompressionModuleConfig& compression_cfg, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
-  int64_t processed_size = num_elems * sizeof(float);
+  size_t processed_size = num_elems * sizeof(float);
   std::memcpy(output, input_data, processed_size);
   return processed_size;
 }
 
-void CPUDummyCompressor::Decompress(
-    unsigned char* input_data, unsigned char* output, int64_t num_elems,
+void CPUDummyCompressor::DecompressBuffer(
+    unsigned char* input_data, unsigned char* output, int num_elems,
     DataType dtype, bool add, const CompressionModuleConfig& compression_cfg,
     void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
@@ -380,7 +405,7 @@ void CPUDummyCompressor::Decompress(
     for (int i = 0; i < num_elems; i++)
       output_f[i] += input_f[i];
   } else {
-    int64_t processed_size = num_elems * sizeof(float);
+    size_t processed_size = num_elems * sizeof(float);
     std::memcpy(output, input_data, processed_size);
   }
 }
@@ -436,66 +461,64 @@ void Quantizer::GetSizesAndOffsets(int num_elements, int world_size,
 // ================
 // Max Min Quantizer
 // ================
-inline int64_t
+inline size_t
 CPUMaxMinQuantizer::BufferSize(int num_elems, DataType dtype,
                                const CompressionModuleConfig& compression_cfg) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  int64_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
-  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
+  size_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
   // Max min buffer to allocate
-  int64_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
+  size_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-int64_t CPUMaxMinQuantizer::Compress(
+size_t CPUMaxMinQuantizer::CompressBuffer(
     unsigned char* input_data, unsigned char* output,
-    unsigned char* feedback_data, int64_t num_elems, DataType dtype,
+    unsigned char* feedback_data, int num_elems, DataType dtype,
     const CompressionModuleConfig& compression_cfg, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   int bits = compression_cfg.quantization_bits;
   int bucket_size = compression_cfg.bucket_size;
-  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
-  int64_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
-  int64_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
+  size_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
+  size_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
 
   auto meta_info_buffer = (float*)output;
   output += meta_buffer_size;
-  for (int64_t bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
+  for (int bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
     CompressBucket(
         input_data, meta_info_buffer, output, feedback_data, compression_cfg,
-        std::min((int64_t)bucket_size, num_elems - bucket_no * bucket_size),
-        bucket_no);
+        std::min(bucket_size, num_elems - bucket_no * bucket_size), bucket_no);
   }
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-void CPUMaxMinQuantizer::Decompress(
-    unsigned char* input_data, unsigned char* output, int64_t num_elems,
+void CPUMaxMinQuantizer::DecompressBuffer(
+    unsigned char* input_data, unsigned char* output, int num_elems,
     DataType dtype, bool add, const CompressionModuleConfig& compression_cfg,
     void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   int bits = compression_cfg.quantization_bits;
   int bucket_size = compression_cfg.bucket_size;
-  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
-  int64_t meta_buffer_size = 2 * sizeof(float) * num_buckets;
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
+  int meta_buffer_size = 2 * sizeof(float) * num_buckets;
 
   auto meta_info_buffer = (float*)input_data;
   input_data += meta_buffer_size;
-  for (int64_t bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
-    DecompressBucket(
-        input_data, meta_info_buffer, output, compression_cfg,
-        std::min((int64_t)bucket_size, num_elems - bucket_no * bucket_size),
-        bucket_no, add);
+  for (int bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
+    DecompressBucket(input_data, meta_info_buffer, output, compression_cfg,
+                     std::min(bucket_size, num_elems - bucket_no * bucket_size),
+                     bucket_no, add);
   }
 }
 
 void CPUMaxMinQuantizer::CompressBucket(
     unsigned char* input_data, float* meta_info_buffer, unsigned char* output,
     unsigned char* feedback_data,
-    const CompressionModuleConfig& compression_cfg, int64_t num_elems,
-    int64_t bucket_no) {
+    const CompressionModuleConfig& compression_cfg, int num_elems,
+    int bucket_no) {
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
   float* input = ((float*)input_data) + bucket_no * bucket_size;
@@ -537,7 +560,7 @@ unsigned char CPUMaxMinQuantizer::EncodeValue(float v, float* feedback,
 void CPUMaxMinQuantizer::DecompressBucket(
     unsigned char* input_data, float* meta_info_buffer,
     unsigned char* output_data, const CompressionModuleConfig& compression_cfg,
-    int64_t num_elems, int64_t bucket_no, bool add) {
+    int num_elems, int bucket_no, bool add) {
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
   float* output = (float*)output_data + bucket_no * bucket_size;
@@ -577,56 +600,54 @@ Status CPUNormalizedQuantizer::Init(
   return Compressor::Init(entries);
 }
 
-inline int64_t CPUNormalizedQuantizer::BufferSize(
+inline size_t CPUNormalizedQuantizer::BufferSize(
     int num_elems, DataType dtype,
     const CompressionModuleConfig& compression_cfg) {
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  int64_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
-  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
-  int64_t meta_buffer_size = get_sizeof(dtype) * num_buckets;
+  size_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
+  size_t meta_buffer_size = get_sizeof(dtype) * num_buckets;
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-int64_t CPUNormalizedQuantizer::Compress(
+size_t CPUNormalizedQuantizer::CompressBuffer(
     unsigned char* input_data, unsigned char* output,
-    unsigned char* feedback_data, int64_t num_elems, DataType dtype,
+    unsigned char* feedback_data, int num_elems, DataType dtype,
     const CompressionModuleConfig& compression_cfg, void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
-  int64_t meta_buffer_size = sizeof(float) * num_buckets;
-  int64_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
+  size_t meta_buffer_size = sizeof(float) * num_buckets;
+  size_t compressed_values_buffer_size = (num_elems * bits + 7) / 8;
 
   auto meta_info_buffer = (float*)output;
   output += meta_buffer_size;
-  for (int64_t bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
+  for (int bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
     CompressBucket(
         input_data, meta_info_buffer, output, feedback_data, compression_cfg,
-        std::min((int64_t)bucket_size, num_elems - bucket_no * bucket_size),
-        bucket_no);
+        std::min(bucket_size, num_elems - bucket_no * bucket_size), bucket_no);
   }
   return compressed_values_buffer_size + meta_buffer_size;
 }
 
-void CPUNormalizedQuantizer::Decompress(
-    unsigned char* input_data, unsigned char* output, int64_t num_elems,
+void CPUNormalizedQuantizer::DecompressBuffer(
+    unsigned char* input_data, unsigned char* output, int num_elems,
     DataType dtype, bool add, const CompressionModuleConfig& compression_cfg,
     void* ctx) {
   assert(dtype == DataType::HOROVOD_FLOAT32);
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
-  int64_t num_buckets = (num_elems + bucket_size - 1) / bucket_size;
-  int64_t meta_buffer_size = sizeof(float) * num_buckets;
+  int num_buckets = (num_elems + bucket_size - 1) / bucket_size;
+  size_t meta_buffer_size = sizeof(float) * num_buckets;
 
   auto meta_info_buffer = (float*)input_data;
   input_data += meta_buffer_size;
-  for (int64_t bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
-    DecompressBucket(
-        input_data, meta_info_buffer, output, compression_cfg,
-        std::min((int64_t)bucket_size, num_elems - bucket_no * bucket_size),
-        bucket_no, add);
+  for (int bucket_no = 0; bucket_no < num_buckets; bucket_no++) {
+    DecompressBucket(input_data, meta_info_buffer, output, compression_cfg,
+                     std::min(bucket_size, num_elems - bucket_no * bucket_size),
+                     bucket_no, add);
   }
 }
 
@@ -693,8 +714,8 @@ float CPUNormalizedQuantizer::DecodeValue(unsigned char input, float norm,
 void CPUNormalizedQuantizer::CompressBucket(
     unsigned char* input_data, float* meta_info_buffer, unsigned char* output,
     unsigned char* feedback_data,
-    const CompressionModuleConfig& compression_cfg, int64_t num_elems,
-    int64_t bucket_no) {
+    const CompressionModuleConfig& compression_cfg, int num_elems,
+    int bucket_no) {
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
   float* input = ((float*)input_data) + bucket_size * bucket_no;
@@ -728,7 +749,7 @@ void CPUNormalizedQuantizer::CompressBucket(
 void CPUNormalizedQuantizer::DecompressBucket(
     unsigned char* input_data, float* meta_info_buffer,
     unsigned char* output_data, const CompressionModuleConfig& compression_cfg,
-    int64_t num_elems, int64_t bucket_no, bool add) {
+    int num_elems, int bucket_no, bool add) {
   const int bits = compression_cfg.quantization_bits;
   const int bucket_size = compression_cfg.bucket_size;
   float* output = (float*)output_data + bucket_no * bucket_size;

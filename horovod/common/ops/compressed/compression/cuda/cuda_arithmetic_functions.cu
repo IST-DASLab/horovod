@@ -25,16 +25,17 @@ __global__ void _add<__half>(int64_t n, const __half* x, const __half* y,
 }
 
 template <typename T>
-void CUDA_add(int64_t n, const T* x, T* y, T* sum, cudaStream_t stream) {
-  int num_threads = MAX_THREADS_PER_BLOCK;
+void CUDA_add(int n, const T* x, T* y, T* sum,
+              cudaStream_t stream) {
+  int num_threads = min(n, MAX_THREADS_PER_BLOCK);
   int blocks = BLOCKS_PER_GRID(n, num_threads);
   _add<T><<<blocks, num_threads, 0, stream>>>(n, x, y, sum);
   CUDA_CHECK(cudaGetLastError());
 }
 
-template void CUDA_add<float>(int64_t n, const float* x, float* y, float* sum,
+template void CUDA_add<float>(int n, const float* x, float* y, float* sum,
                               cudaStream_t stream);
-template void CUDA_add<Half>(int64_t n, const Half* x, Half* y, Half* sum,
+template void CUDA_add<Half>(int n, const Half* x, Half* y, Half* sum,
                              cudaStream_t stream);
 
 } // namespace cuda

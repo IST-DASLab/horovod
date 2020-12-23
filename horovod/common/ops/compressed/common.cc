@@ -15,8 +15,10 @@ Compressor* CreateGPUCompressor(GPUContext* gpu_context,
       HOROVOD_COMPRESSION_LEVELS_TYPE, LevelsType::Pos);
 
   auto quantization_bits = GetIntEnvOrDefault(HOROVOD_QUANTIZATION_BITS, 32);
+  float topk_ratio = GetDoubleEnvOrDefault(HOROVOD_COMPRESSION_TOPK_RATIO, 1.0);
   Compressor* compressor;
-  if (quantization_bits == 32 || compression_type == NoneCompression) {
+  if ((quantization_bits == 32 && topk_ratio == 1.0) ||
+      compression_type == NoneCompression) {
     compressor = new GPUDummyCompressor(gpu_context, global_state, summator);
   } else {
     switch (compression_type) {
@@ -29,6 +31,10 @@ Compressor* CreateGPUCompressor(GPUContext* gpu_context,
       compressor = new GPUNormalizedQuantizer(
           gpu_context, global_state, summator, quantization_bits,
           compression_type, norm_type, levels_type);
+      break;
+    case CompressionType::TopK:
+      compressor = new GPUTopKCompressor(gpu_context, global_state, summator,
+                                         topk_ratio);
       break;
     default:
       throw std::logic_error("Invalid compression type.");

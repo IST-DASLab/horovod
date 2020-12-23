@@ -11,7 +11,7 @@ struct SHM_Allreduce_Ring : public SHMReducer {
                      CommunicatorType comm_type);
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
-                           int64_t global_offset) override;
+                           unsigned char* buffer_ptr) override;
 
   Status Init(const std::vector<TensorTableEntry>& entries,
               MPI_Comm comm) override;

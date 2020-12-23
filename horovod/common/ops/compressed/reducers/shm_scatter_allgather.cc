@@ -34,6 +34,8 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
   int64_t chunk_size =
+      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
+  chunk_size =
       ALIGNED_SIZE((tensor_fusion_threshold_ + world_size - 1) / world_size);
   int64_t buffer_size = chunk_size * world_size + chunk_size * (world_size - 1);
 
@@ -96,7 +98,12 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
 
 Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     int num_elements, std::vector<TensorTableEntry>& entries,
-    int64_t global_offset) {
+    unsigned char* buffer_ptr) {
+  // Synchronize with error feedback.
+  CUDA_CHECK(cudaStreamSynchronize(
+      gpu_context_
+          ->streams[global_state_->current_nccl_stream][entries[0].device]));
+
   int world_size = global_state_->controller->GetSize();
   int rank = global_state_->controller->GetRank();
   std::vector<int> chunk_sizes, offsets;
@@ -104,8 +111,8 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
                                   chunk_sizes);
   int start_elem = offsets[rank];
   int recv_num_elems = chunk_sizes[rank];
-  int recv_compressed_size = ALIGNED_SIZE(compressor_->BufferSize(
-      recv_num_elems, entries, start_elem, global_offset));
+  int recv_compressed_size = ALIGNED_SIZE(
+      compressor_->BufferSize(recv_num_elems, entries, start_elem));
   int send_num_elems = 0;
   void* peer_buf = nullptr;
   size_t compressed_size = 0;
@@ -122,9 +129,9 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     int start_offset = offsets[node_rank];
     send_num_elems = chunk_sizes[node_rank];
 
-    compressed_size = ALIGNED_SIZE(compressor_->Compress(
-        compressed_buf, entries, start_offset, global_offset,
-        send_num_elems, true, false, &streams_[node_rank]));
+    compressed_size = ALIGNED_SIZE(
+        compressor_->Compress(buffer_ptr, compressed_buf, entries, start_offset,
+                              send_num_elems, false, &streams_[node_rank]));
 
     hcomm_->Send(compressed_buf, compressed_size, node_rank,
                  streams_[node_rank]);
@@ -170,8 +177,8 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
         it = indices.erase(it);
         int idx = node_rank - ((node_rank > rank) ? 1 : 0);
         compressor_->Decompress(gradients_recv_ + idx * recv_compressed_size,
-                                entries, start_elem, global_offset,
-                                recv_num_elems, true, &streams_[rank]);
+                                buffer_ptr, entries, start_elem, recv_num_elems,
+                                true, &streams_[rank]);
       } else {
         it++;
       }
@@ -179,11 +186,10 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   }
 
   // Second round of SRA.
-  compressor_->Compress(compressed_buf, entries, start_elem,
-                        global_offset, recv_num_elems, false, true,
-                        &streams_[rank]);
+  compressor_->Compress(buffer_ptr, compressed_buf, entries, start_elem,
+                        recv_num_elems, true, &streams_[rank]);
   CUDA_CHECK(cudaEventRecord(events_[rank], streams_[rank]));
-  compressor_->Decompress(compressed_buf, entries, start_elem, global_offset,
+  compressor_->Decompress(compressed_buf, buffer_ptr, entries, start_elem,
                           recv_num_elems, false, &streams_[rank]);
   compressed_size = recv_compressed_size;
   hcomm_->WaitSendAll();
@@ -216,9 +222,10 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
         cudaMemcpyAsync(gradients_recv_ + compressed_offset, peer_buf,
                         compressed_size, cudaMemcpyDeviceToDevice,
                         streams_[node_rank]);
-        compressor_->Decompress(
-            gradients_recv_ + compressed_offset, entries, their_start_offset,
-            global_offset, their_recv_num_elems, false, &streams_[node_rank]);
+        compressor_->Decompress(gradients_recv_ + compressed_offset, buffer_ptr,
+                                entries, their_start_offset,
+                                their_recv_num_elems, false,
+                                &streams_[node_rank]);
       } else {
         it++;
       }

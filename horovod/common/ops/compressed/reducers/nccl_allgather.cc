@@ -26,7 +26,8 @@ Status NCCL_Allreduce_AllGather::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size = tensor_fusion_threshold_;
+  int64_t chunk_size =
+      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
   int64_t buffer_size = chunk_size * world_size + chunk_size;
 
   auto status = bufferManager_.InitializeBuffer(
@@ -56,14 +57,14 @@ Status NCCL_Allreduce_AllGather::Init(
 Status NCCL_Allreduce_AllGather::AllreduceDivision(
     int num_elements, ncclComm_t* nccl_comm,
     std::vector<horovod::common::TensorTableEntry>& entries,
-    int64_t global_offset) {
+    unsigned char* buffer_ptr) {
   int world_size = global_state_->controller->GetSize();
   int rank = global_state_->controller->GetRank();
   int64_t send_rcv_size =
-      compressor_->BufferSize(num_elements, entries, 0, global_offset);
+      compressor_->BufferSize(num_elements, entries, 0);
   unsigned char* send_buf = gradients_recv_ + rank * send_rcv_size;
-  compressor_->Compress(send_buf, entries, 0, global_offset,
-                        num_elements, true, false, stream_);
+  compressor_->Compress(buffer_ptr, send_buf, entries, 0,
+                        num_elements, false, stream_);
   if (global_state_->timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_COMPRESSION,
                               *stream_);
@@ -79,14 +80,14 @@ Status NCCL_Allreduce_AllGather::AllreduceDivision(
                               *stream_);
   }
   unsigned char* recv_buf = gradients_recv_;
-  compressor_->Decompress(send_buf, entries, 0, global_offset, num_elements,
+  compressor_->Decompress(send_buf, buffer_ptr, entries, 0, num_elements,
                           false, stream_);
   for (int node_rank = 0; node_rank < world_size; node_rank++) {
     if (node_rank == rank) {
       recv_buf += send_rcv_size;
       continue;
     }
-    compressor_->Decompress(recv_buf, entries, 0, global_offset, num_elements,
+    compressor_->Decompress(recv_buf, buffer_ptr, entries, 0, num_elements,
                             true, stream_);
     recv_buf += send_rcv_size;
   }

@@ -44,6 +44,8 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
           new CPUNormalizedQuantizer(global_state, summator, quantization_bits,
                                      compression_type, norm_type, levels_type);
       break;
+    case CompressionType::TopK:
+      break;
     default:
       throw std::logic_error("Invalid compression type.");
     }
@@ -81,27 +83,24 @@ Status MPI_CompressedAllReduce::Allreduce(
     return status;
   }
   compressor_->ApplyErrorFeedback(entries);
-  int64_t tensor_fusion_threshold =
-      global_state_->parameter_manager.TensorFusionThresholdBytes();
-  if (buffer_len > tensor_fusion_threshold) {
-    int num_divisions =
-        (buffer_len + tensor_fusion_threshold - 1) / tensor_fusion_threshold;
-    int num_elements_division = 0;
-    int64_t global_offset = 0;
-    for (int division = 0; division < num_divisions; division++) {
-      num_elements_division =
-          (division == num_divisions - 1 &&
-           buffer_len % tensor_fusion_threshold != 0)
-              ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
-              : tensor_fusion_threshold / sizeof(float);
-      status = reducer_->AllreduceDivision(num_elements_division, entries,
-                                           global_offset);
-      if (!status.ok())
-        break;
-      global_offset += (tensor_fusion_threshold / sizeof(float));
+  const void* fused_input_data;
+  void* buffer_ptr = nullptr;
+  if (compressor_->GetCompressionMode() != CompressionMode::NonFused) {
+    if (entries.size() == 1) {
+      buffer_ptr = (void*) entries[0].output->data();
+    } else {
+      size_t dummy;
+      MemcpyInFusionBuffer(entries, fused_input_data, buffer_ptr,
+                           dummy);
     }
-  } else {
-    status = reducer_->AllreduceDivision(num_elements, entries, 0l);
+  }
+  status = reducer_->AllreduceDivision(num_elements, entries, (unsigned char*) buffer_ptr);
+  if (!status.ok()) {
+    return status;
+  }
+  if (compressor_->GetCompressionMode() != CompressionMode::NonFused and
+      entries.size() > 1) {
+    MemcpyOutFusionBuffer(buffer_ptr, entries);
   }
   return status;
 }

@@ -41,7 +41,19 @@ void CUDA_convert_to_halves(float* input, Half* output, int numel);
 void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
                       cudaStream_t stream);
 
-int CUDA_get_curand_array_size(int num_elems);
+size_t CUDA_get_curand_array_size(int num_elems);
+
+size_t CUDA_get_topk_utility_buf_size();
+
+template <typename T>
+void CUDA_topk_compress(unsigned char* input_data, unsigned char* output_data,
+                        unsigned char* utility_buf, unsigned char* feedback,
+                        int num_elems,
+                        int num_result, cudaStream_t stream);
+
+template <typename T, bool ADD>
+void CUDA_topk_decompress(unsigned char* input_data, unsigned char* output_data,
+                          int num_elems, int num_result, cudaStream_t stream);
 
 } // namespace cuda
 } // namespace common

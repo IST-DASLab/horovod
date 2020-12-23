@@ -5,7 +5,7 @@
 
 namespace horovod {
 namespace common {
-int64_t round_to(int64_t x, int64_t m) {
+size_t round_to(size_t x, int64_t m) {
   return x + ((m - x % m) % m);
 }
 

@@ -32,7 +32,8 @@ Status SHM_Allreduce_Ring::Init(const std::vector<TensorTableEntry>& entries,
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
   int64_t chunk_size =
-      ALIGNED_SIZE((tensor_fusion_threshold_ + world_size - 1) / world_size);
+      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
+  chunk_size = (chunk_size + world_size - 1) / world_size;
   int64_t buffer_size = chunk_size + chunk_size;
   Status status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -76,7 +77,7 @@ Status SHM_Allreduce_Ring::Init(const std::vector<TensorTableEntry>& entries,
 Status
 SHM_Allreduce_Ring::AllreduceDivision(int num_elements,
                                       std::vector<TensorTableEntry>& entries,
-                                      int64_t global_offset) {
+                                      unsigned char* buffer_ptr) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   gpuStream_t stream =
@@ -91,8 +92,8 @@ SHM_Allreduce_Ring::AllreduceDivision(int num_elements,
   const size_t send_to = (rank + 1) % world_size;
 
   int recv_segment_idx, send_segment_idx;
-  int64_t buf_send_idx, buf_recv_idx;
-  int64_t send_size, recv_size;
+  int buf_send_idx, buf_recv_idx;
+  int send_size, recv_size;
   void* peer_buf = nullptr;
   int agg_send_offset = 0;
   int agg_recv_offset = 0;
@@ -104,10 +105,10 @@ SHM_Allreduce_Ring::AllreduceDivision(int num_elements,
     buf_recv_idx = offsets[recv_segment_idx];
 
     recv_size = ALIGNED_SIZE(compressor_->BufferSize(
-        chunk_sizes[recv_segment_idx], entries, buf_recv_idx, global_offset));
+        chunk_sizes[recv_segment_idx], entries, buf_recv_idx));
     send_size = ALIGNED_SIZE(compressor_->Compress(
-        gradients_send_, entries, buf_send_idx, global_offset,
-        chunk_sizes[send_segment_idx], i == 0, false, (void*)&stream));
+        buffer_ptr, gradients_send_, entries, buf_send_idx,
+        chunk_sizes[send_segment_idx], false, &stream));
 
     hcomm_->Send(gradients_send_, send_size, send_to, stream, agg_send_offset);
     agg_send_offset += send_size;
@@ -115,19 +116,18 @@ SHM_Allreduce_Ring::AllreduceDivision(int num_elements,
     agg_recv_offset += recv_size;
     CUDA_CHECK(cudaMemcpyAsync(gradients_recv_, peer_buf, recv_size,
                                cudaMemcpyDeviceToDevice, stream));
-    compressor_->Decompress(gradients_recv_, entries, buf_recv_idx,
-                            global_offset, chunk_sizes[recv_segment_idx], true,
-                            (void*)&stream);
+    compressor_->Decompress(gradients_recv_, buffer_ptr, entries, buf_recv_idx,
+                            chunk_sizes[recv_segment_idx], true, &stream);
   }
   hcomm_->WaitSendAll();
   send_segment_idx = (rank + world_size + 1) % world_size;
   buf_send_idx = offsets[send_segment_idx];
   unsigned char* send_buf = gradients_send_;
-  send_size = ALIGNED_SIZE(compressor_->Compress(
-      send_buf, entries, buf_send_idx, global_offset,
-      chunk_sizes[send_segment_idx], false, true, (void*)&stream));
-  compressor_->Decompress(send_buf, entries, buf_send_idx, global_offset,
-                          chunk_sizes[send_segment_idx], false, (void*)&stream);
+  send_size = ALIGNED_SIZE(
+      compressor_->Compress(buffer_ptr, send_buf, entries, buf_send_idx,
+                            chunk_sizes[send_segment_idx], true, &stream));
+  compressor_->Decompress(send_buf, buffer_ptr, entries, buf_send_idx,
+                          chunk_sizes[send_segment_idx], false, &stream);
   agg_send_offset = 0;
   agg_recv_offset = 0;
   // Second round
@@ -136,16 +136,15 @@ SHM_Allreduce_Ring::AllreduceDivision(int num_elements,
     // Segment to send - at every iteration we send segment (r+1-i)
     buf_recv_idx = offsets[recv_segment_idx];
     recv_size = ALIGNED_SIZE(compressor_->BufferSize(
-        chunk_sizes[recv_segment_idx], entries, buf_recv_idx, global_offset));
+        chunk_sizes[recv_segment_idx], entries, buf_recv_idx));
     hcomm_->Send(gradients_send_, send_size, send_to, stream, agg_send_offset);
     agg_send_offset += send_size;
     hcomm_->RecvBuf(&peer_buf, recv_from, stream, agg_recv_offset);
     agg_recv_offset += recv_size;
     CUDA_CHECK(cudaMemcpyAsync(gradients_send_, peer_buf, recv_size,
                                cudaMemcpyDeviceToDevice, stream));
-    compressor_->Decompress(gradients_send_, entries, buf_recv_idx,
-                            global_offset, chunk_sizes[recv_segment_idx], false,
-                            (void*)&stream);
+    compressor_->Decompress(gradients_send_, buffer_ptr, entries, buf_recv_idx,
+                            chunk_sizes[recv_segment_idx], false, &stream);
     send_size = recv_size;
   }
   hcomm_->WaitSendAll();

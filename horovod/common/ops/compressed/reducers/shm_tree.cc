@@ -21,6 +21,7 @@ size_t SHM_Allreduce_Tree::GetRequiredFreeSize() {
   int world_size = global_state_->controller->GetSize();
   int64_t chunk_size = tensor_fusion_threshold_;
   int64_t buffer_size = 3 * chunk_size + chunk_size * world_size / 2;
+  return buffer_size;
 }
 
 Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
@@ -29,7 +30,8 @@ Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
   auto& first_entry = entries[0];
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
-  int64_t chunk_size = tensor_fusion_threshold_;
+  int64_t chunk_size =
+      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
   int64_t buffer_size = chunk_size + chunk_size + chunk_size;
   auto status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -77,7 +79,7 @@ Status SHM_Allreduce_Tree::Init(const std::vector<TensorTableEntry>& entries,
 Status
 SHM_Allreduce_Tree::AllreduceDivision(int num_elements,
                                       std::vector<TensorTableEntry>& entries,
-                                      int64_t global_offset) {
+                                      unsigned char* buffer_ptr) {
   const int world_size = global_state_->controller->GetSize();
   const int rank = global_state_->controller->GetRank();
 
@@ -88,30 +90,30 @@ SHM_Allreduce_Tree::AllreduceDivision(int num_elements,
       gpu_context_
           ->streams[global_state_->current_nccl_stream][entries[0].device];
   int64_t send_rcv_size = ALIGNED_SIZE(
-      compressor_->BufferSize(num_elements, entries, 0, global_offset));
+      compressor_->BufferSize(num_elements, entries, 0));
 
   // First round of Tree algorithm. Bottom-up.
   while (shift < world_size) {
-    if (rank % (2 * shift) == 0) {
-      peer_rank = rank + shift;
+    shift *= 2;
+    if (rank % shift == 0) {
+      peer_rank = rank + shift / 2;
       hcomm_->RecvBuf(&peer_buf, peer_rank, stream, 0);
       CUDA_CHECK(cudaMemcpyAsync(gradients_recv_, peer_buf, send_rcv_size,
                                  cudaMemcpyDeviceToDevice, stream));
-      compressor_->Decompress(gradients_recv_, entries, 0, global_offset,
+      compressor_->Decompress(gradients_recv_, buffer_ptr, entries, 0,
                               num_elements, true, &stream);
     } else {
-      peer_rank = rank - shift;
-      compressor_->Compress(gradients_send_, entries, (int64_t)0, global_offset,
-                            num_elements, false, false, &stream);
+      peer_rank = rank - shift / 2;
+      compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
+                            num_elements, false, &stream);
       hcomm_->Send(gradients_send_, send_rcv_size, peer_rank, stream, 0);
       break;
     }
-    shift *= 2;
   }
 
   if (rank == 0) {
-    compressor_->Compress(gradients_send_, entries, 0, global_offset,
-                          num_elements, false, true, &stream);
+    compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
+                          num_elements, true, &stream);
   }
   // Second round. Top-down. Propagate reduced values.
   while (shift > 1) {
@@ -129,7 +131,7 @@ SHM_Allreduce_Tree::AllreduceDivision(int num_elements,
       }
     }
   }
-  compressor_->Decompress(gradients_send_, entries, 0, global_offset,
+  compressor_->Decompress(gradients_send_, buffer_ptr, entries, 0,
                           num_elements, false, &stream);
   hcomm_->WaitSendAll();
   global_state_->controller->Barrier(Communicator::GLOBAL);

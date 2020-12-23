@@ -29,10 +29,11 @@ Status NCCL_Allreduce_ScatterAllgather::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
+  int64_t chunk_size =
+    std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
+  chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
   int64_t buffer_size = chunk_size * (world_size - 1) +
                         chunk_size * (world_size - 1) + chunk_size;
-
   stream_ =
       &gpu_context_
            ->streams[global_state_->current_nccl_stream][entries[0].device];
@@ -65,7 +66,7 @@ Status NCCL_Allreduce_ScatterAllgather::Init(
 
 Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     int num_elements, ncclComm_t* comm, std::vector<TensorTableEntry>& entries,
-    int64_t global_offset) {
+    unsigned char* buffer_ptr) {
 
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
@@ -75,8 +76,7 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
   int start_elem = offsets[rank];
   int recv_num_elems = chunk_sizes[rank];
   int recv_compressed_size =
-      round_to(compressor_->BufferSize(recv_num_elems, entries, start_elem,
-                                       global_offset),
+      round_to(compressor_->BufferSize(recv_num_elems, entries, start_elem),
                ALIGNMENT_UNIT);
   int send_num_elems = 0;
   int send_compressed_size = 0;
@@ -92,8 +92,8 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     int start_offset = offsets[node_rank];
     send_num_elems = chunk_sizes[node_rank];
     send_compressed_size = ALIGNED_SIZE(
-        compressor_->Compress(send_buf, entries, start_offset, global_offset,
-                              send_num_elems, true, false, stream_));
+        compressor_->Compress(buffer_ptr, send_buf, entries, start_offset,
+                              send_num_elems, false, stream_));
     send_buf += send_compressed_size;
     send_sizes.push(send_compressed_size);
   }
@@ -128,14 +128,14 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
 
   recv_buf = gradients_recv_;
   for (int i = 0; i < world_size - 1; i++) {
-    compressor_->Decompress(recv_buf, entries, start_elem, global_offset,
+    compressor_->Decompress(recv_buf, buffer_ptr, entries, start_elem,
                             recv_num_elems, true, stream_);
     recv_buf += recv_compressed_size;
   }
 
-  compressor_->Compress(gradients_send_, entries, start_elem, global_offset,
-                        recv_num_elems, false, true, stream_);
-  compressor_->Decompress(gradients_send_, entries, start_elem, global_offset,
+  compressor_->Compress(buffer_ptr, gradients_send_, entries, start_elem,
+                        recv_num_elems, true, stream_);
+  compressor_->Decompress(gradients_send_, buffer_ptr, entries, start_elem,
                           recv_num_elems, false, stream_);
   if (timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_->event_queue, Q_DECOMPRESSION,
@@ -153,7 +153,7 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     int their_start_offset = offsets[node_rank];
     recv_num_elems = chunk_sizes[node_rank];
     recv_compressed_size = ALIGNED_SIZE(compressor_->BufferSize(
-        recv_num_elems, entries, their_start_offset, global_offset));
+        recv_num_elems, entries, their_start_offset));
     NCCL_CALL_CHECK("ncclRecv",
                     ncclRecv(recv_buf, recv_compressed_size, ncclChar,
                              node_rank, *comm, *stream_),
@@ -179,9 +179,9 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     int their_start_offset = offsets[node_rank];
     recv_num_elems = chunk_sizes[node_rank];
     recv_compressed_size = ALIGNED_SIZE(compressor_->BufferSize(
-        recv_num_elems, entries, their_start_offset, global_offset));
-    compressor_->Decompress(recv_buf, entries, their_start_offset,
-                            global_offset, recv_num_elems, false, stream_);
+        recv_num_elems, entries, their_start_offset));
+    compressor_->Decompress(recv_buf, buffer_ptr, entries, their_start_offset,
+                            recv_num_elems, false, stream_);
     recv_buf += recv_compressed_size;
   }
   if (timeline.Initialized()) {

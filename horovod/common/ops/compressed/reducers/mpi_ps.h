@@ -11,7 +11,7 @@ struct MPI_Allreduce_PS : public MPIReducer {
                    HorovodGlobalState* global_state, Compressor* compressor);
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
-                           int64_t global_offset) override;
+                           unsigned char* buffer_ptr) override;
   Status Init(const std::vector<TensorTableEntry>& entries,
               MPI_Comm comm) override;
   size_t GetRequiredFreeSize() override;

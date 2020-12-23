@@ -27,7 +27,9 @@ Status MPI_Allreduce_Ring::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
+  int64_t chunk_size =
+      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
+  chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
   int64_t buffer_size = chunk_size * world_size + chunk_size + chunk_size;
   Status status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
@@ -54,7 +56,7 @@ Status MPI_Allreduce_Ring::Init(
 
 Status MPI_Allreduce_Ring::AllreduceDivision(
     int num_elements, std::vector<horovod::common::TensorTableEntry>& entries,
-    int64_t global_offset) {
+    unsigned char* buffer_ptr) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   std::vector<int> chunk_sizes, offsets;
@@ -71,8 +73,8 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   MPI_Request recv_req;
 
   int recv_segment_idx, send_segment_idx;
-  int64_t buf_send_idx, buf_recv_idx;
-  int64_t send_size, recv_size;
+  int buf_send_idx, buf_recv_idx;
+  int send_size, recv_size;
   for (int i = 0; i < world_size - 1; i++) {
     recv_segment_idx = (rank - i - 1 + world_size) % world_size;
     send_segment_idx = (rank - i + world_size) % world_size;
@@ -80,13 +82,13 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
     buf_recv_idx = offsets[recv_segment_idx];
 
     recv_size = ALIGNED_SIZE(compressor_->BufferSize(
-        chunk_sizes[recv_segment_idx], entries, buf_recv_idx, global_offset));
+        chunk_sizes[recv_segment_idx], entries, buf_recv_idx));
 
     MPI_CHECK(MPI_Irecv(gradients_recv_, recv_size, MPI_UNSIGNED_CHAR,
                         recv_from, 0, comm_, &recv_req));
     send_size = ALIGNED_SIZE(compressor_->Compress(
-        gradients_send_, entries, buf_send_idx, global_offset,
-        chunk_sizes[send_segment_idx], i == 0, false, (void*)&stream));
+        buffer_ptr, gradients_send_, entries, buf_send_idx,
+        chunk_sizes[send_segment_idx], false, &stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     MPI_CHECK(MPI_Send(gradients_send_, send_size, MPI_UNSIGNED_CHAR, send_to,
                        0, comm_));
@@ -94,18 +96,17 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
     // Wait for recv to complete before reduction
     MPI_CHECK(MPI_Wait(&recv_req, MPI_STATUSES_IGNORE));
 
-    compressor_->Decompress(gradients_recv_, entries, buf_recv_idx,
-                            global_offset, chunk_sizes[recv_segment_idx], true,
-                            (void*)&stream);
+    compressor_->Decompress(gradients_recv_, buffer_ptr, entries, buf_recv_idx,
+                            chunk_sizes[recv_segment_idx], true, &stream);
   }
 
   send_segment_idx = (rank + world_size + 1) % world_size;
   buf_send_idx = offsets[send_segment_idx];
   unsigned char* send_buf = gradients_send_;
   send_size = ALIGNED_SIZE(compressor_->Compress(
-      send_buf, entries, buf_send_idx, global_offset,
-      chunk_sizes[send_segment_idx], false, true, (void*)&stream));
-  compressor_->Decompress(send_buf, entries, buf_send_idx, global_offset,
+      buffer_ptr, send_buf, entries, buf_send_idx,
+      chunk_sizes[send_segment_idx], true, (void*)&stream));
+  compressor_->Decompress(send_buf, buffer_ptr, entries, buf_send_idx,
                           chunk_sizes[send_segment_idx], false, (void*)&stream);
   unsigned char* recv_buf = send_buf + send_size;
   unsigned char* compressed_buf = recv_buf;
@@ -116,7 +117,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
     // Segment to send - at every iteration we send segment (r+1-i)
     buf_recv_idx = offsets[recv_segment_idx];
     recv_size = ALIGNED_SIZE(compressor_->BufferSize(
-        chunk_sizes[recv_segment_idx], entries, buf_recv_idx, global_offset));
+        chunk_sizes[recv_segment_idx], entries, buf_recv_idx));
 
     // Segment to recv - at every iteration we receive segment (r-i)
     MPI_CHECK(MPI_Sendrecv(send_buf, send_size, MPI_UNSIGNED_CHAR, send_to, 0,
@@ -132,11 +133,10 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
     recv_segment_idx = (rank - i + world_size) % world_size;
     buf_recv_idx = offsets[recv_segment_idx];
 
-    compressor_->Decompress(compressed_buf, entries, buf_recv_idx,
-                            global_offset, chunk_sizes[recv_segment_idx], false,
-                            (void*)&stream);
+    compressor_->Decompress(compressed_buf, buffer_ptr, entries, buf_recv_idx,
+                            chunk_sizes[recv_segment_idx], false, &stream);
     recv_size = ALIGNED_SIZE(compressor_->BufferSize(
-        chunk_sizes[recv_segment_idx], entries, buf_recv_idx, global_offset));
+        chunk_sizes[recv_segment_idx], entries, buf_recv_idx));
     compressed_buf += recv_size;
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));

@@ -59,7 +59,7 @@ public:
 
   virtual Status AllreduceDivision(int num_elements,
                                    std::vector<TensorTableEntry>& entries,
-                                   int64_t global_offset) = 0;
+                                   unsigned char* buffer_ptr) = 0;
 
 protected:
   MPIContext* mpi_context_;
@@ -82,7 +82,7 @@ public:
 
   virtual Status AllreduceDivision(int num_elements, ncclComm_t* nccl_comm,
                                    std::vector<TensorTableEntry>& entries,
-                                   int64_t global_offset) = 0;
+                                   unsigned char* buffer_ptr) = 0;
 
 protected:
   NCCLContext* nccl_context_;
@@ -99,9 +99,6 @@ public:
       : MPIReducer(mpi_context, gpu_context, global_state, compressor),
         comm_type_(comm_type){};
 
-  virtual Status AllreduceDivision(int num_elements,
-                                   std::vector<TensorTableEntry>& entries,
-                                   int64_t global_offset) = 0;
   virtual ~SHMReducer() { hcomm_.reset(); }
 
 protected:

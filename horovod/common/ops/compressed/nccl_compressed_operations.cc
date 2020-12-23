@@ -27,9 +27,8 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
 
   switch (reduction_type) {
   case ReductionType::AllGather:
-    reducer_ = new NCCL_Allreduce_AllGather(nccl_context, gpu_context,
-                                           &gpu_op_context_, global_state,
-                                           compressor_);
+    reducer_ = new NCCL_Allreduce_AllGather(
+        nccl_context, gpu_context, &gpu_op_context_, global_state, compressor_);
     break;
   case ReductionType::ScatterAllgather:
 #ifdef NCCL_P2P_SUPPORTED
@@ -42,9 +41,8 @@ NCCL_CompressedAllreduce::NCCL_CompressedAllreduce(
 #endif
   case ReductionType::Ring:
 #ifdef NCCL_P2P_SUPPORTED
-    reducer_ =
-        new NCCL_Allreduce_Ring(nccl_context, gpu_context, &gpu_op_context_,
-                                global_state, compressor_);
+    reducer_ = new NCCL_Allreduce_Ring(
+        nccl_context, gpu_context, &gpu_op_context_, global_state, compressor_);
     break;
 #else
     throw std::logic_error(
@@ -67,29 +65,25 @@ Status NCCL_CompressedAllreduce::Allreduce(
     return status;
   }
   compressor_->ApplyErrorFeedback(entries);
-  int64_t tensor_fusion_threshold =
-      global_state_->parameter_manager.TensorFusionThresholdBytes();
-  if (buffer_len > tensor_fusion_threshold) {
-    int num_divisions =
-        (buffer_len + tensor_fusion_threshold - 1) / tensor_fusion_threshold;
-    int num_elements_division = 0;
-    int64_t global_offset = 0;
-    for (int division = 0; division < num_divisions; division++) {
-      num_elements_division =
-          (division == num_divisions - 1 &&
-           buffer_len % tensor_fusion_threshold != 0)
-              ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
-              : tensor_fusion_threshold / sizeof(float);
-      status = reducer_->AllreduceDivision(num_elements_division,
-                                          nccl_op_context_.nccl_comm_, entries,
-                                          global_offset);
-      if (!status.ok())
-        return status;
-      global_offset += (tensor_fusion_threshold / sizeof(float));
+  const void* fused_input_data;
+  void* buffer_ptr = nullptr;
+  if (compressor_->GetCompressionMode() != CompressionMode::NonFused) {
+    if (entries.size() == 1) {
+      buffer_ptr = (void*)entries[0].output->data();
+    } else {
+      size_t dummy;
+      MemcpyInFusionBuffer(entries, fused_input_data, buffer_ptr, dummy);
     }
-  } else {
-    status = reducer_->AllreduceDivision(
-        num_elements, nccl_op_context_.nccl_comm_, entries, 0l);
+  }
+  status =
+      reducer_->AllreduceDivision(num_elements, nccl_op_context_.nccl_comm_,
+                                  entries, (unsigned char*)buffer_ptr);
+  if (!status.ok()) {
+    return status;
+  }
+  if (compressor_->GetCompressionMode() != CompressionMode::NonFused and
+      entries.size() > 1) {
+    MemcpyOutFusionBuffer(buffer_ptr, entries);
   }
   return status;
 }
@@ -136,11 +130,11 @@ bool NCCL_CompressedAllreduce::Enabled(
   size_t free = 0, total;
   cuMemGetInfo(&free, &total);
   size_t need_free = (reducer_ != nullptr and !reducer_->isInitialized())
-                     ? reducer_->GetRequiredFreeSize()
-                     : 0;
+                         ? reducer_->GetRequiredFreeSize()
+                         : 0;
   need_free += (compressor_ != nullptr and !compressor_->isInitialized())
-               ? compressor_->GetRequiredFreeSize()
-               : 0;
+                   ? compressor_->GetRequiredFreeSize()
+                   : 0;
   int result = 1;
   if (reducer_ == nullptr ||
       NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *

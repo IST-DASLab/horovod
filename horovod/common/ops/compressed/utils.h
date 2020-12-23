@@ -13,7 +13,7 @@ using seconds_type = std::chrono::duration<double>;
 const int ALIGNMENT_UNIT = 2 * sizeof(float);
 #define ALIGNED_SIZE(size) round_to(size, ALIGNMENT_UNIT)
 
-int64_t round_to(int64_t x, int64_t m);
+size_t round_to(size_t x, int64_t m);
 
 double time_since(std::chrono::time_point<clock_>& start_);
 

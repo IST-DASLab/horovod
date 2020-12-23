@@ -475,6 +475,10 @@ def parse_args():
                                         choices=list(config_parser.ReductionType),
                                         action=make_override_action(override_args),
                                         help='Allreduce algorithm to use in case of compressed communication.')
+    group_grad_compression.add_argument('--compression-mode', type=config_parser.CompressionMode.from_string,
+                                        action=make_override_action(override_args),
+                                        choices=list(config_parser.CompressionMode),
+                                        help='Compression algorithm to use in case of compressed communication ')
     group_grad_compression.add_argument('--compression-type', type=config_parser.CompressionType.from_string,
                                         action=make_override_action(override_args),
                                         choices=list(config_parser.CompressionType),
@@ -496,6 +500,9 @@ def parse_args():
     group_grad_compression.add_argument('--compression-nccl-fake-ratio', type=float, default=1.0,
                                         action=make_override_action(override_args),
                                         help='Fake compression in nccl')
+    group_grad_compression.add_argument('--compression-topk-ratio', type=float, default=1.0,
+                                        action=make_override_action(override_args),
+                                        help='TopK compression ratio')
     group_grad_compression.add_argument('--compression-error-feedback', action=make_override_true_action(override_args),
                                         help='Enable error feedback for gradient compression.')
     group_grad_compression.add_argument('--compression-skip-incomplete-buckets', action=make_override_true_action(override_args),

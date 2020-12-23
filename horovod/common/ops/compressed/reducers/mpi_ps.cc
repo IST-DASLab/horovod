@@ -27,7 +27,8 @@ Status MPI_Allreduce_PS::Init(
   auto& first_entry = entries[0];
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
-  int64_t chunk_size = tensor_fusion_threshold_;
+  int64_t chunk_size =
+      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
   int64_t buffer_size = chunk_size + chunk_size * (world_size - 1);
 
   auto status = bufferManager_.InitializeBuffer(
@@ -54,7 +55,7 @@ Status MPI_Allreduce_PS::Init(
 
 Status MPI_Allreduce_PS::AllreduceDivision(
     int num_elements, std::vector<horovod::common::TensorTableEntry>& entries,
-    int64_t global_offset) {
+    unsigned char* buffer_ptr) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
@@ -68,9 +69,8 @@ Status MPI_Allreduce_PS::AllreduceDivision(
   if (rank == 0) {
     std::vector<MPI_Request> requests;
     std::vector<int> idx_map;
-    send_rcv_size = ALIGNED_SIZE(
-        compressor_->BufferSize(num_elements, entries, 0, global_offset));
-
+    send_rcv_size =
+        ALIGNED_SIZE(compressor_->BufferSize(num_elements, entries, 0));
     // First round.
     // Collect all gradients, decompress and aggregate them.
     for (int node_rank = 1; node_rank < world_size; node_rank++) {
@@ -88,31 +88,27 @@ Status MPI_Allreduce_PS::AllreduceDivision(
       int idx = idx_map[req_idx];
       requests.erase(requests.begin() + req_idx);
       idx_map.erase(idx_map.begin() + req_idx);
-      compressor_->Decompress(gradients_recv_ + idx * send_rcv_size, entries, 0,
-                              global_offset, num_elements, true, &stream);
+      compressor_->Decompress(gradients_recv_ + idx * send_rcv_size, buffer_ptr,
+                              entries, 0, num_elements, true, &stream);
     }
 
     // Second round.
     // Broadcast the result
-    compressor_->Compress(gradients_send_, entries, 0,
-                          global_offset, num_elements, false, true, &stream);
+    compressor_->Compress(buffer_ptr, gradients_send_, entries, 0, num_elements,
+                          true, &stream);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
   } else {
     send_rcv_size = ALIGNED_SIZE(compressor_->Compress(
-        gradients_send_, entries, 0, global_offset,
-        num_elements, true, false, &stream));
-    op = MPI_Send(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, 0,
-                  comm_);
-    if (op != MPI_SUCCESS) {
-      throw std::runtime_error("MPI_Send failed, see MPI output for details.");
-    }
+        buffer_ptr, gradients_send_, entries, 0, num_elements, false, &stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    MPI_CHECK(MPI_Send(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, 0,
+                       comm_));
   }
-  op = MPI_Bcast(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, comm_);
-  if (op != MPI_SUCCESS) {
-    throw std::runtime_error(
-        "MPI_Broadcast failed, see MPI output for details.");
-  }
-  compressor_->Decompress(gradients_send_, entries, 0, global_offset,
-                          num_elements, false, &stream);
+  MPI_CHECK(
+      MPI_Bcast(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, comm_));
+  compressor_->Decompress(gradients_send_, buffer_ptr, entries, 0, num_elements,
+                          false, &stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   return Status::OK();
 }
 

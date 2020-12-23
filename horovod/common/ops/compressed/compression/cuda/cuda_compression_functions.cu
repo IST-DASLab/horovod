@@ -5,6 +5,7 @@
 namespace horovod {
 namespace common {
 namespace cuda {
+using uint64_t = unsigned long long int;
 
 // Single value quantization functions
 template <typename T, bool EF>
@@ -241,7 +242,7 @@ __device__ void find_meta_parallel(T* input, unsigned char* meta,
 }
 
 template <int BITS>
-inline __device__ void pack_value(const int64_t value, unsigned char* output,
+inline __device__ void pack_value(const uint64_t value, unsigned char* output,
                                   unsigned int shift = 0) {
 #pragma unroll BITS
   for (unsigned int j = 0; j < BITS; j++) {
@@ -250,7 +251,7 @@ inline __device__ void pack_value(const int64_t value, unsigned char* output,
 }
 
 template <>
-inline __device__ void pack_value<2>(const int64_t value, unsigned char* output,
+inline __device__ void pack_value<2>(const uint64_t value, unsigned char* output,
                                      unsigned int shift) {
   U2 output2;
 #pragma unroll 2
@@ -262,7 +263,7 @@ inline __device__ void pack_value<2>(const int64_t value, unsigned char* output,
 }
 
 template <>
-inline __device__ void pack_value<3>(const int64_t value, unsigned char* output,
+inline __device__ void pack_value<3>(const uint64_t value, unsigned char* output,
                                      unsigned int shift) {
   U3 output3;
 #pragma unroll 3
@@ -274,7 +275,7 @@ inline __device__ void pack_value<3>(const int64_t value, unsigned char* output,
 }
 
 template <>
-inline __device__ void pack_value<4>(const int64_t value, unsigned char* output,
+inline __device__ void pack_value<4>(const uint64_t value, unsigned char* output,
                                      unsigned int shift) {
   U4 output4;
 #pragma unroll 4
@@ -286,14 +287,14 @@ inline __device__ void pack_value<4>(const int64_t value, unsigned char* output,
 }
 
 template <>
-inline __device__ void pack_value<6>(const int64_t value, unsigned char* output,
+inline __device__ void pack_value<6>(const uint64_t value, unsigned char* output,
                                      unsigned int shift) {
   pack_value<3>(value, output, 0);
   pack_value<3>(value, output + 3, 3);
 }
 
 template <>
-inline __device__ void pack_value<8>(const int64_t value, unsigned char* output,
+inline __device__ void pack_value<8>(const uint64_t value, unsigned char* output,
                                      unsigned int shift) {
   pack_value<4>(value, output, 0);
   pack_value<4>(value, output + 4, 4);
@@ -303,7 +304,6 @@ template <typename T, CompressFunc FUNC, bool EF, int BITS>
 __device__ void CompressBucket(T* input, unsigned char* output,
                                T* feedback_data, unsigned char* meta_info,
                                int num_elems, CurandState* state, void* ctx) {
-  using uint64_t = unsigned long long int;
   unsigned int tid = threadIdx.x;
   unsigned int num_threads = blockDim.x;
   float rand;
@@ -823,3 +823,5 @@ template void CUDA_dequantize_Norm<Half, false>(unsigned char* input_data,
 } // namespace cuda
 } // namespace common
 } // namespace horovod
+
+#include "topk_compression.cu"

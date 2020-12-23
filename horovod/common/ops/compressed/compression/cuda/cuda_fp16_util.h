@@ -1,4 +1,4 @@
-#ifndef HOROVOD_CUDA_FUNCTIONS_UTIL_H
+#ifndef HOROVOD_CUDA_FP16_UTIL_H
 #define HOROVOD_CUDA_FP16_UTIL_H
 #include <cuda_fp16.h>
 
@@ -164,6 +164,16 @@ __device__ inline __half float2type(float a) {
   return __float2half(a);
 }
 
+template <typename T>
+__device__ inline bool isnan(T a) {
+  return ::isnan(a);
+}
+
+template <>
+__device__ inline bool isnan(__half a) {
+  return __hisnan(a);
+}
+
 __global__ void float2half(float* input, __half* output, int numel) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int stride = blockDim.x * gridDim.x;
@@ -175,4 +185,4 @@ __global__ void float2half(float* input, __half* output, int numel) {
 } // namespace cuda
 } // namespace common
 } // namespace horovod
-#endif // HOROVOD_CUDA_FUNCTIONS_UTIL_H
+#endif // HOROVOD_CUDA_FP16_UTIL_H

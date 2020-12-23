@@ -1,3 +1,6 @@
+#ifndef HOROVOD_CUDA_RAND_H
+#define HOROVOD_CUDA_RAND_H
+
 #include <climits>
 #include "cuda_def.h"
 
@@ -87,7 +90,7 @@ void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
                  stream>>>(seed, states);
 }
 
-int CUDA_get_curand_array_size(int num_elems) {
+size_t CUDA_get_curand_array_size(int num_elems) {
   return BLOCKS_PER_GRID(num_elems, THREADS_PER_BLOCK_COMPRESS) * THREADS_PER_BLOCK_COMPRESS *
          sizeof(CurandState);
 }
@@ -95,3 +98,4 @@ int CUDA_get_curand_array_size(int num_elems) {
 } // namespace cuda
 } // namespace common
 } // namespace horovod
+#endif // HOROVOD_CUDA_RAND_H

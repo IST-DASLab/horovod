@@ -6,6 +6,7 @@
 #include "reducers/mpi_ps.h"
 #include "reducers/mpi_ring.h"
 #include "reducers/mpi_scatter_allgather.h"
+#include "reducers/mpi_tree.h"
 #include "reducers/shm_ring.h"
 #include "reducers/shm_scatter_allgather.h"
 #include "reducers/shm_tree.h"
@@ -34,14 +35,15 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
     return;
   }
   auto summator = new GPUSummator(global_state, gpu_context);
-  Compressor* compressor = CreateGPUCompressor(gpu_context, global_state, summator);
+  Compressor* compressor =
+      CreateGPUCompressor(gpu_context, global_state, summator);
   global_compressor = compressor;
   compressor_ = compressor;
   if (communicator_type == CommunicatorType::MPI) {
     switch (reduction_type) {
     case ReductionType::AllGather:
-      reducer_ = new MPI_Allreduce_AllGather(
-          mpi_context, gpu_context, global_state, compressor);
+      reducer_ = new MPI_Allreduce_AllGather(mpi_context, gpu_context,
+                                             global_state, compressor);
       break;
     case ReductionType::Ring:
       reducer_ = new MPI_Allreduce_Ring(mpi_context, gpu_context, global_state,
@@ -54,6 +56,10 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
     case ReductionType::PS:
       reducer_ = new MPI_Allreduce_PS(mpi_context, gpu_context, global_state,
                                       compressor);
+      break;
+    case ReductionType::Tree:
+      reducer_ = new MPI_Allreduce_Tree(mpi_context, gpu_context, global_state,
+                                        compressor);
       break;
     default:
       reducer_ = nullptr;
@@ -72,14 +78,12 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
           communicator_type);
       break;
     case ReductionType::Ring:
-      reducer_ =
-          new SHM_Allreduce_Ring(mpi_context, gpu_context, global_state,
-                                 compressor, communicator_type);
+      reducer_ = new SHM_Allreduce_Ring(mpi_context, gpu_context, global_state,
+                                        compressor, communicator_type);
       break;
     case ReductionType::Tree:
-      reducer_ =
-          new SHM_Allreduce_Tree(mpi_context, gpu_context, global_state,
-                                 compressor, communicator_type);
+      reducer_ = new SHM_Allreduce_Tree(mpi_context, gpu_context, global_state,
+                                        compressor, communicator_type);
       break;
     default:
       reducer_ = nullptr;
@@ -98,27 +102,28 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
     return status;
   }
   compressor_->ApplyErrorFeedback(entries);
-  int64_t tensor_fusion_threshold =
-      global_state_->parameter_manager.TensorFusionThresholdBytes();
-  if (buffer_len > tensor_fusion_threshold) {
-    int num_divisions =
-        (buffer_len + tensor_fusion_threshold - 1) / tensor_fusion_threshold;
-    int num_elements_division = 0;
-    int64_t global_offset = 0;
-    for (int division = 0; division < num_divisions; division++) {
-      num_elements_division =
-          (division == num_divisions - 1 &&
-           buffer_len % tensor_fusion_threshold != 0)
-              ? (buffer_len % tensor_fusion_threshold) / sizeof(float)
-              : tensor_fusion_threshold / sizeof(float);
-      status = reducer_->AllreduceDivision(num_elements_division, entries,
-                                           global_offset);
-      if (!status.ok())
-        break;
-      global_offset += (tensor_fusion_threshold / sizeof(float));
+  const void* fused_input_data;
+  void* buffer_ptr = nullptr;
+  if (compressor_->GetCompressionMode() != CompressionMode::NonFused) {
+    if (entries.size() == 1) {
+      buffer_ptr = (void*)entries[0].output->data();
+    } else {
+      size_t dummy;
+      MemcpyInFusionBuffer(entries, fused_input_data, buffer_ptr, dummy);
     }
-  } else {
-    status = reducer_->AllreduceDivision(num_elements, entries, 0l);
+
+    CUDA_CHECK(cudaStreamSynchronize(
+        gpu_context_
+            ->streams[global_state_->current_nccl_stream][entries[0].device]));
+  }
+  status = reducer_->AllreduceDivision(num_elements, entries,
+                                       (unsigned char*)buffer_ptr);
+  if (!status.ok()) {
+    return status;
+  }
+  if (compressor_->GetCompressionMode() != CompressionMode::NonFused and
+      entries.size() > 1) {
+    MemcpyOutFusionBuffer(buffer_ptr, entries);
   }
   return status;
 }
@@ -148,11 +153,13 @@ bool MPI_GPUCompressedAllReduce::Enabled(
     const horovod::common::ParameterManager& param_manager,
     const std::vector<TensorTableEntry>& entries,
     const horovod::common::Response& response) const {
-  size_t free = 0, total;
+  size_t free = 50, total;
+  cudaDeviceSynchronize();
   cuMemGetInfo(&free, &total);
   size_t need_free = (reducer_ != nullptr and !reducer_->isInitialized())
                          ? reducer_->GetRequiredFreeSize()
                          : 0;
+  //  size_t need_free = 0;
   need_free += (compressor_ != nullptr and !compressor_->isInitialized())
                    ? compressor_->GetRequiredFreeSize()
                    : 0;
@@ -167,15 +174,18 @@ bool MPI_GPUCompressedAllReduce::Enabled(
       entries[0].device == CPU_DEVICE_ID || need_free > free) {
     result = 0;
   }
-  MPI_Allreduce((void*)&result, (void*)&result, 1, MPI_INT, MPI_SUM,
-                MPI_COMM_WORLD);
-  if (result < global_state_->controller->GetSize()) {
-    if (need_free > free) {
-      LOG(DEBUG) << "Switch to nccl due to lack of memory";
+  if (need_free > 0) {
+    MPI_Allreduce((void*)&result, (void*)&result, 1, MPI_INT, MPI_SUM,
+                  MPI_COMM_WORLD);
+    if (result < global_state_->controller->GetSize()) {
+      if (need_free > free) {
+        LOG(DEBUG) << "Switch to nccl due to lack of memory";
+      }
+      return false;
     }
-    return false;
   }
-  return GPUAllreduce::Enabled(param_manager, entries, response);
+  return (result != 0) &&
+         GPUAllreduce::Enabled(param_manager, entries, response);
 }
 
 bool MPI_GPUCompressedAllReduce::EnabledName(const std::string& name) const {

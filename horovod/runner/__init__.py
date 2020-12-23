@@ -92,6 +92,7 @@ class _HorovodArgs(object):
         self.communicator_type = 'none'
         self.reduction_type = 'none'
         self.compression_type = 'none'
+        self.compression_mode = 'NonFused'
         self.compression_error_feedback = False
 
 

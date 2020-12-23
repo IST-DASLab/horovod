@@ -58,12 +58,14 @@ HOROVOD_COMPRESSION_BUCKET_SIZE = "HOROVOD_COMPRESSION_BUCKET_SIZE"
 HOROVOD_COMMUNICATOR = "HOROVOD_COMMUNICATOR"
 HOROVOD_REDUCTION = "HOROVOD_REDUCTION"
 HOROVOD_COMPRESSION = "HOROVOD_COMPRESSION"
+HOROVOD_COMPRESSION_MODE = "HOROVOD_COMPRESSION_MODE"
 HOROVOD_COMPRESSION_NORM_TYPE = "HOROVOD_COMPRESSION_NORM_TYPE"
 HOROVOD_NCCL_FAKE_COMPRESSION = "HOROVOD_NCCL_FAKE_COMPRESSION"
 HOROVOD_COMPRESSION_LEVELS_TYPE = "HOROVOD_COMPRESSION_LEVELS_TYPE"
 HOROVOD_COMPRESSION_ERROR_FEEDBACK = "HOROVOD_COMPRESSION_ERROR_FEEDBACK"
 HOROVOD_COMPRESSION_CONFIG_FILE = "HOROVOD_COMPRESSION_CONFIG_FILE"
 HOROVOD_COMPRESSION_SKIP_INCOMPLETE_BUCKETS = "HOROVOD_COMPRESSION_SKIP_INCOMPLETE_BUCKETS"
+HOROVOD_COMPRESSION_TOPK_RATIO = "HOROVOD_COMPRESSION_TOPK_RATIO"
 
 class CommunicatorType(Enum):
     MPI = 0
@@ -101,11 +103,28 @@ class ReductionType(Enum):
             raise ValueError("Wrong Reduction type")
 
 
+class CompressionMode(Enum):
+    NonFused = 0
+    PerEntryFused = 1
+    Fused = 2
+
+    def __str__(self):
+        return self.name
+
+    @staticmethod
+    def from_string(s):
+        try:
+            return CompressionMode[s]
+        except KeyError:
+            raise ValueError("Wrong Compression type")
+
+
 class CompressionType(Enum):
     maxmin = 0
     uni = 1
     exp = 2
-    none = 3
+    topk = 3
+    none = 4
 
     def __str__(self):
         return self.name
@@ -225,9 +244,11 @@ def set_args_from_config(args, config, override_args):
         _set_arg_from_config(args, 'compression_config_filename', override_args, compression, arg_prefix='compression_')
         _set_arg_from_config(args, 'reduction_type', override_args, compression, arg_prefix='compression_')
         _set_arg_from_config(args, 'compression_type', override_args, compression, arg_prefix='compression_')
+        _set_arg_from_config(args, 'compression_mode', override_args, compression, arg_prefix='compression_')
         _set_arg_from_config(args, 'compression_levels_type', override_args, compression, arg_prefix='compression_')
         _set_arg_from_config(args, 'compression_norm_type', override_args, compression, arg_prefix='compression_')
         _set_arg_from_config(args, 'compression_nccl_fake_ratio', override_args, compression, arg_prefix='compression_')
+        _set_arg_from_config(args, 'compression_topk_ratio', override_args, compression, arg_prefix='compression_')
 
 def _validate_arg_nonnegative(args, arg_name):
     value = getattr(args, arg_name)
@@ -315,9 +336,11 @@ def set_env_from_args(env, args):
     _add_arg_to_env(env, HOROVOD_COMMUNICATOR, args.communicator_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_REDUCTION, args.reduction_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_COMPRESSION, args.compression_type, enum_tf)
+    _add_arg_to_env(env, HOROVOD_COMPRESSION_MODE, args.compression_mode, enum_tf)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_LEVELS_TYPE, args.compression_levels_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_NORM_TYPE, args.compression_norm_type, enum_tf)
     _add_arg_to_env(env, HOROVOD_NCCL_FAKE_COMPRESSION, args.compression_nccl_fake_ratio)
+    _add_arg_to_env(env, HOROVOD_COMPRESSION_TOPK_RATIO, args.compression_topk_ratio)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_ERROR_FEEDBACK, args.compression_error_feedback, identity)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_SKIP_INCOMPLETE_BUCKETS, args.compression_skip_incomplete_buckets, identity)
     _add_arg_to_env(env, HOROVOD_COMPRESSION_CONFIG_FILE, args.compression_config_filename)

@@ -15,8 +15,8 @@ MPI_Allreduce_AllGather::MPI_Allreduce_AllGather(
 
 size_t MPI_Allreduce_AllGather::GetRequiredFreeSize() {
   int world_size = global_state_->controller->GetSize();
-  size_t chunk_size =
-      global_state_->parameter_manager.TensorFusionThresholdBytes();
+  size_t chunk_size = tensor_fusion_threshold_;
+//      global_state_->parameter_manager.TensorFusionThresholdBytes();
   return chunk_size + chunk_size * (world_size - 1) + chunk_size;
 }
 
@@ -28,7 +28,7 @@ MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries,
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
   int64_t chunk_size =
-      global_state_->parameter_manager.TensorFusionThresholdBytes();
+      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
   int64_t buffer_size = chunk_size + chunk_size * (world_size - 1) + chunk_size;
 
   auto status = bufferManager_.InitializeBuffer(
@@ -56,7 +56,7 @@ MPI_Allreduce_AllGather::Init(const std::vector<TensorTableEntry>& entries,
 
 Status MPI_Allreduce_AllGather::AllreduceDivision(
     int num_elements, std::vector<TensorTableEntry>& entries,
-    int64_t global_offset) {
+    unsigned char* buffer_ptr) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
@@ -65,8 +65,8 @@ Status MPI_Allreduce_AllGather::AllreduceDivision(
       gpu_context_
           ->streams[global_state_->current_nccl_stream][entries[0].device];
   int64_t send_rcv_size = ALIGNED_SIZE(
-      compressor_->Compress(gradients_send_, entries, 0, global_offset,
-                            num_elements, true, false, &stream));
+      compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
+                            num_elements, false, &stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   timeline.ActivityEndAll(entries);
   std::vector<MPI_Request> requests;
@@ -89,11 +89,11 @@ Status MPI_Allreduce_AllGather::AllreduceDivision(
       MPI_Waitall((int)requests.size(), requests.data(), MPI_STATUSES_IGNORE));
   timeline.ActivityEndAll(entries);
   timeline.ActivityStartAll(entries, Q_DECOMPRESSION);
-  compressor_->Decompress(gradients_send_, entries, 0, global_offset,
-                          num_elements, false, (void*)&stream);
+  compressor_->Decompress(gradients_send_, buffer_ptr, entries, 0, num_elements,
+                          false, (void*)&stream);
   for (int i = 0; i < world_size - 1; i++) {
-    compressor_->Decompress(gradients_recv_ + i * send_rcv_size, entries, 0,
-                            global_offset, num_elements, true, (void*)&stream);
+    compressor_->Decompress(gradients_recv_ + i * send_rcv_size, buffer_ptr,
+                            entries, 0, num_elements, true, (void*)&stream);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
   timeline.ActivityEndAll(entries);

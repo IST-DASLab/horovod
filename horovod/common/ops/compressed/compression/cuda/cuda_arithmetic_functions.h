@@ -7,7 +7,7 @@ namespace common {
 namespace cuda {
 
 template <typename T>
-void CUDA_add(int64_t n, const T* x, T* y, T* sum, cudaStream_t stream);
+void CUDA_add(int n, const T* x, T* y, T* sum, cudaStream_t stream);
 
 } // namespace cuda
 } // namespace common

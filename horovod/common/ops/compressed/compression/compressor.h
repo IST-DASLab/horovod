@@ -22,51 +22,31 @@ public:
   // Returns size of buffer to allocate for usage in compress (in bytes). We
   // assume that no compression will be done in-place.
   virtual ~Compressor() = default;
-  virtual int64_t
-  BufferSize(int num_elems, DataType dtype,
-             const CompressionModuleConfig& compression_cfg) = 0;
-  int64_t BufferSize(int num_elems,
-                     const std::vector<TensorTableEntry>& entries,
-                     int64_t fusion_offset, int64_t global_offset);
-  // Returns size of compressed size (in bytes). And update error_feedback.
-  // If error_feedback is nullptr, it's not updated.
-  virtual int64_t Compress(unsigned char* input_data, unsigned char* output,
-                           unsigned char* feedback_data, int64_t num_elems,
-                           DataType dtype,
-                           const CompressionModuleConfig& compression_cfg,
-                           void* ctx) = 0;
-  // Decompress data from input to output.
-  // If add is True sum decompressed data with output.
-  virtual void Decompress(unsigned char* input, unsigned char* output,
-                          int64_t num_elems, DataType dtype, bool add,
-                          const CompressionModuleConfig& compression_cfg,
-                          void* ctx) = 0;
-  // Compresses input_data into output per entry. Returns size of compressed
-  // data.
-  int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   const std::vector<TensorTableEntry>& entries,
-                   int64_t fusion_offset,
-                   int64_t global_offset, int64_t chunk_num_elems,
-                   bool disable_error_feedback, void* ctx);
-  // Decompresses input_data into output.
+  virtual size_t BufferSize(int num_elems, DataType dtype,
+                            const CompressionModuleConfig& compression_cfg) = 0;
+  size_t BufferSize(int num_elems, const std::vector<TensorTableEntry>& entries,
+                    int fusion_offset);
+
+  size_t Compress(unsigned char* input_data, unsigned char* output,
+                  const std::vector<TensorTableEntry>& entries,
+                  int fusion_offset, int chunk_num_elems,
+                  bool disable_error_feedback, void* ctx);
   void Decompress(unsigned char* input_data, unsigned char* output,
                   const std::vector<TensorTableEntry>& entries,
-                  int64_t fusion_offset, int64_t chunk_num_elems, bool add,
-                  void* ctx);
-  // Compresses entries data into output. Returns size of compressed data.
-  // @original parameter stands for where take the values from entry: original
-  // tensor or output.
-  int64_t Compress(unsigned char* output,
-                   const std::vector<TensorTableEntry>& entries,
-                   int64_t fusion_offset,
-                   int64_t global_offset, int64_t chunk_num_elems,
-                   bool original, bool disable_error_feedback, void* ctx);
-  // Decompresses input_data into entries.
-  void Decompress(unsigned char* input_data,
-                  const std::vector<TensorTableEntry>& entries,
-                  int64_t fusion_offset, int64_t global_offset,
-                  int64_t chunk_num_elems, bool add, void* ctx);
+                  int fusion_offset, int chunk_num_elems, bool add, void* ctx);
 
+  // Returns size of compressed size (in bytes). And update error_feedback.
+  // If error_feedback is nullptr, it's not updated.
+  virtual size_t
+  CompressBuffer(unsigned char* input_data, unsigned char* output,
+                 unsigned char* feedback_data, int num_elems, DataType dtype,
+                 const CompressionModuleConfig& compression_cfg, void* ctx) = 0;
+  // Decompress data from input to output.
+  // If add is True sum decompressed data with output.
+  virtual void DecompressBuffer(unsigned char* input, unsigned char* output,
+                                int num_elems, DataType dtype, bool add,
+                                const CompressionModuleConfig& compression_cfg,
+                                void* ctx) = 0;
   virtual Status Init(const std::vector<TensorTableEntry>& entries);
   virtual void SetQuantizationLevels(float* levels, int bits);
   using map_compresion_configs =
@@ -79,10 +59,9 @@ public:
                                   std::vector<int>& offsets,
                                   std::vector<int>& sizes);
   virtual size_t GetRequiredFreeSize();
-  bool isInitialized() { return initialized_; }
-  void ApplyErrorFeedback(std::vector<TensorTableEntry>& entries) {
-    error_feedback_.Apply(entries);
-  }
+  bool isInitialized() const { return initialized_; }
+  void ApplyErrorFeedback(std::vector<TensorTableEntry>& entries);
+  CompressionMode GetCompressionMode() const { return compression_mode_; }
 
 protected:
   const int MIN_SIZE_TO_COMPRESS = 16;
@@ -93,11 +72,39 @@ protected:
   CompressionModuleConfig& GetModuleConfig(const std::string& name);
   bool initialized_;
   ErrorFeedback error_feedback_;
+  CompressionMode compression_mode_;
 
 private:
+  // Compresses entries data into output. Returns size of compressed data.
+  // @original parameter stands for where take the values from entry: original
+  // tensor or output.
+  size_t CompressFromEntries(unsigned char* output,
+                             const std::vector<TensorTableEntry>& entries,
+                             int fusion_offset, int chunk_num_elems,
+                             bool disable_error_feedback,
+                             void* ctx);
+  // Decompresses input_data into entries.
+  void DecompressIntoEntries(unsigned char* input_data,
+                             const std::vector<TensorTableEntry>& entries,
+                             int fusion_offset, int chunk_num_elems, bool add,
+                             void* ctx);
+
+  // Compresses input_data into output per entry. Returns size of compressed
+  // data.
+  size_t CompressPerEntry(unsigned char* input_data, unsigned char* output,
+                          const std::vector<TensorTableEntry>& entries,
+                          int fusion_offset, int chunk_num_elems,
+                          bool disable_error_feedback, void* ctx);
+  // Decompresses input_data into output.
+  void DecompressPerEntry(unsigned char* input_data, unsigned char* output,
+                          const std::vector<TensorTableEntry>& entries,
+                          int fusion_offset, int chunk_num_elems, bool add,
+                          void* ctx);
+
   void ParseYaml(const char* file);
   map_compresion_configs modules_configs;
   set_ignore_modules ignore_modules;
+  unsigned char* fused_feedback_buf = nullptr;
 };
 
 class DummyCompressor : public Compressor {
@@ -106,8 +113,8 @@ public:
                   Summator* summator)
       : Compressor(global_state, summator) {}
 
-  int64_t BufferSize(int num_elems, DataType dtype,
-                     const CompressionModuleConfig& compression_cfg) final;
+  size_t BufferSize(int num_elems, DataType dtype,
+                    const CompressionModuleConfig& compression_cfg) final;
 };
 
 class CPUDummyCompressor : public DummyCompressor {
@@ -115,15 +122,15 @@ public:
   CPUDummyCompressor(HorovodGlobalState* global_state, Summator* summator)
       : DummyCompressor(global_state, summator) {}
 
-  int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems,
-                   DataType dtype,
-                   const CompressionModuleConfig& compression_cfg,
-                   void* ctx) override;
-  void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add,
-                  const CompressionModuleConfig& compression_cfg,
-                  void* ctx) override;
+  size_t CompressBuffer(unsigned char* input_data, unsigned char* output,
+                        unsigned char* feedback_data, int num_elems,
+                        DataType dtype,
+                        const CompressionModuleConfig& compression_cfg,
+                        void* ctx) override;
+  void DecompressBuffer(unsigned char* input_data, unsigned char* output,
+                        int num_elems, DataType dtype, bool add,
+                        const CompressionModuleConfig& compression_cfg,
+                        void* ctx) override;
 };
 
 class CPURandomizer {
@@ -163,27 +170,27 @@ public:
   CPUMaxMinQuantizer(HorovodGlobalState* global_state, Summator* summator,
                      int quantization_bits)
       : MaxMinQuantizer(global_state, summator, quantization_bits) {}
-  int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems,
-                   DataType dtype,
-                   const CompressionModuleConfig& compression_cfg,
-                   void* ctx) override;
-  void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add,
-                  const CompressionModuleConfig& compression_cfg,
-                  void* ctx) override;
+  size_t CompressBuffer(unsigned char* input_data, unsigned char* output,
+                        unsigned char* feedback_data, int num_elems,
+                        DataType dtype,
+                        const CompressionModuleConfig& compression_cfg,
+                        void* ctx) override;
+  void DecompressBuffer(unsigned char* input_data, unsigned char* output,
+                        int num_elems, DataType dtype, bool add,
+                        const CompressionModuleConfig& compression_cfg,
+                        void* ctx) override;
   void CompressBucket(unsigned char* input_data, float* meta_info_buffer,
                       unsigned char* output, unsigned char* feedback_data,
                       const CompressionModuleConfig& compression_cfg,
-                      int64_t num_elems, int64_t bucket_no);
+                      int num_elems, int bucket_no);
   void DecompressBucket(unsigned char* input_data, float* meta_info_buffer,
                         unsigned char* output,
                         const CompressionModuleConfig& compression_cfg,
-                        int64_t num_elems, int64_t bucket_no, bool add);
+                        int num_elems, int bucket_no, bool add);
   unsigned char EncodeValue(float v, float* feedback, float min, float unit);
   float DecodeValue(unsigned char input, float max, float min);
-  int64_t BufferSize(int num_elems, DataType dtype,
-                     const CompressionModuleConfig& compression_cfg);
+  size_t BufferSize(int num_elems, DataType dtype,
+                    const CompressionModuleConfig& compression_cfg);
 
 private:
   CPURandomizer randomizer;
@@ -219,15 +226,15 @@ public:
                             compression_type, norm_type, levels_type) {}
   Status
   Init(const std::vector<horovod::common::TensorTableEntry>& entries) override;
-  int64_t Compress(unsigned char* input_data, unsigned char* output,
-                   unsigned char* feedback_data, int64_t num_elems,
-                   DataType dtype,
-                   const CompressionModuleConfig& compression_cfg,
-                   void* ctx) override;
-  void Decompress(unsigned char* input_data, unsigned char* output,
-                  int64_t num_elems, DataType dtype, bool add,
-                  const CompressionModuleConfig& compression_cfg,
-                  void* ctx) override;
+  size_t CompressBuffer(unsigned char* input_data, unsigned char* output,
+                        unsigned char* feedback_data, int num_elems,
+                        DataType dtype,
+                        const CompressionModuleConfig& compression_cfg,
+                        void* ctx) override;
+  void DecompressBuffer(unsigned char* input_data, unsigned char* output,
+                        int num_elems, DataType dtype, bool add,
+                        const CompressionModuleConfig& compression_cfg,
+                        void* ctx) override;
 
   unsigned char EncodeValue(float input, float* feedback, float norm, int bits);
 
@@ -236,13 +243,13 @@ public:
   void CompressBucket(unsigned char* input_data, float* meta_info_buffer,
                       unsigned char* output, unsigned char* feedback_data,
                       const CompressionModuleConfig& compression_cfg,
-                      int64_t num_elems, int64_t bucket_no);
+                      int num_elems, int bucket_no);
   void DecompressBucket(unsigned char* input_data, float* meta_info_buffer,
                         unsigned char* output,
                         const CompressionModuleConfig& compression_cfg,
-                        int64_t num_elems, int64_t bucket_no, bool add);
-  int64_t BufferSize(int num_elems, DataType dtype,
-                     const CompressionModuleConfig& compression_cfg);
+                        int num_elems, int bucket_no, bool add);
+  size_t BufferSize(int num_elems, DataType dtype,
+                    const CompressionModuleConfig& compression_cfg);
 };
 
 } // namespace common
