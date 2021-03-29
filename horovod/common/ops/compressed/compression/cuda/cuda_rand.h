@@ -64,7 +64,7 @@ __global__ void _init_curand(unsigned int seed, CurandState* states) {
 //      z[i] = (seed + index) % 128;
 //    states[index] = toInt(z);
   states[index] = xorshift128_init(seed * index);
-//  curand_init(seed, index, 0, &states[index]);
+//  curand_init(seed, index, 1000, &states[index]);
 }
 
 inline __device__ float xorshift128p(xorshift128p_state* state) {

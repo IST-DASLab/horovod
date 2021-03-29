@@ -352,7 +352,7 @@ size_t GPUNormalizedQuantizer::CompressBuffer(
           levels_type_, *stream);
     } else {
       cuda::CUDA_quantize_Norm<Half>(input, output, feedback,
-                                     (Half*)bits_to_levels_[bits],
+                                     bits_to_levels_fp16_[bits],
                                      num_elems_compress, bits, bucket_size,
                                      gpu_compression_context_->cuda_states_,
                                      norm_type_, levels_type_, *stream);
@@ -393,7 +393,7 @@ void GPUNormalizedQuantizer::DecompressBuffer(
             bucket_size, levels_type_, *stream);
       } else {
         cuda::CUDA_dequantize_Norm<Half, true>(
-            input, output, (Half*)bits_to_levels_[bits], num_elems_decompress,
+            input, output, bits_to_levels_fp16_[bits], num_elems_decompress,
             bits, bucket_size, levels_type_, *stream);
       }
     } else {
@@ -403,7 +403,7 @@ void GPUNormalizedQuantizer::DecompressBuffer(
             bucket_size, levels_type_, *stream);
       } else {
         cuda::CUDA_dequantize_Norm<Half, false>(
-            input, output, (Half*)bits_to_levels_[bits], num_elems_decompress,
+            input, output, bits_to_levels_fp16_[bits], num_elems_decompress,
             bits, bucket_size, levels_type_, *stream);
       }
     }

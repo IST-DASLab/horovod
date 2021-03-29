@@ -155,6 +155,16 @@ __device__ inline bool lt(__half a, __half b) {
 }
 
 template <typename T>
+__device__ inline bool le(T a, T b) {
+  return a <= b;
+}
+
+template <>
+__device__ inline bool le(__half a, __half b) {
+  return __hle(a, b);
+}
+
+template <typename T>
 __device__ inline T float2type(float a) {
   return (T) a;
 }
@@ -162,6 +172,16 @@ __device__ inline T float2type(float a) {
 template <>
 __device__ inline __half float2type(float a) {
   return __float2half(a);
+}
+
+template <typename T>
+__device__ inline float type2float(T a) {
+  return (float) a;
+}
+
+template <>
+__device__ inline float type2float(__half a) {
+  return __half2float(a);
 }
 
 template <typename T>
