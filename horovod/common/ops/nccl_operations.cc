@@ -168,8 +168,7 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
 
   // Do allreduce.
   auto nccl_result = ncclAllReduce(
-      fused_input_data, buffer_data, (size_t)(num_elements),
-//      fused_input_data, buffer_data, (size_t)(num_elements * fake_comp_ratio_),
+      fused_input_data, buffer_data, (size_t)(num_elements * fake_comp_ratio_),
       GetNCCLDataType(first_entry.tensor), ncclSum,
       *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream);
   nccl_context_->ErrorCheck("ncclAllReduce", nccl_result,

@@ -49,7 +49,7 @@ ddl_built = _basics.ddl_built
 ccl_built = _basics.ccl_built
 cuda_built = _basics.cuda_built
 rocm_built = _basics.rocm_built
-set_quantization_levels = _basics.set_quantization_levels
+# set_quantization_levels = _basics.set_quantization_levels
 
 def shutdown(*args, **kwargs):
     mpi_lib.horovod_torch_reset()

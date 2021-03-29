@@ -10,7 +10,7 @@ MPI_Allreduce_Tree::MPI_Allreduce_Tree(MPIContext* mpi_context,
                                        Compressor* compressor)
     : MPIReducer(mpi_context, gpu_context, global_state, compressor) {
   if (global_state->controller->GetLocalRank() == 0) {
-    LOG(INFO) << "SHM_Ring";
+    LOG(INFO) << "MPI_Tree";
   }
 }
 

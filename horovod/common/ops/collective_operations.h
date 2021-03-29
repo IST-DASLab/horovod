@@ -41,6 +41,7 @@ public:
 
   virtual Status Execute(std::vector<TensorTableEntry>& entries,
                          const Response& response) = 0;
+  virtual bool GlobalEnabled(const ParameterManager& param_manager) const;
 
 protected:
   int64_t NumElements(std::vector<TensorTableEntry>& entries) const;

@@ -16,7 +16,6 @@ Status ErrorFeedback::Init(const std::vector<TensorTableEntry>& entries) {
     return Status::OK();
   Status status;
   for (auto& entry : entries) {
-    // TODO: Add timeline callbacks
     status = bufferManager_.InitializeBuffer(
         entry.tensor_name,
         entry.tensor->shape().num_elements() *
@@ -61,6 +60,8 @@ void ErrorFeedback::CopyToErrorFeedback(
     unsigned char* feedback_buffer_input,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     int num_elems, int fusion_offset, void* ctx) {
+  if (!enabled_)
+    return;
   assert(entries.size() > 1);
   int offset_cumm = 0;
   int nelem = 0;

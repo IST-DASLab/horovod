@@ -17,9 +17,12 @@ GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   device_ = first_entry.device;
   gpu_op_context_.InitGPU(entries);
-
-  int chunk_size =
-      global_state_->parameter_manager.TensorFusionThresholdBytes();
+  bool need_reinitialize = entries[0].tensor->size() > required_size;
+  required_size = std::max(
+      std::max(entries[0].tensor->size(),
+               global_state_->parameter_manager.TensorFusionThresholdBytes()),
+      required_size);
+  int chunk_size = required_size;
   int num_elems_in_chunk =
       ceil(((double)chunk_size) / get_sizeof(first_entry.tensor->dtype()));
   size_t curand_array_size =
@@ -36,7 +39,7 @@ GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
   auto buffer =
       bufferManager_.GetBuffer(device_, first_entry.context->framework(),
                                global_state_->current_nccl_stream);
-  if (cuda_states_ == nullptr) {
+  if (need_reinitialize) {
     cuda_states_ = static_cast<CurandState*>(
         const_cast<void*>(buffer->AccessData(first_entry.context)));
     cuda::CUDA_init_curand(
@@ -145,9 +148,8 @@ size_t GPUMaxMinQuantizer::CompressBuffer(
 }
 
 void GPUMaxMinQuantizer::DecompressBuffer(
-    unsigned char* input, unsigned char* output, int num_elems,
-    DataType dtype, bool add, const CompressionModuleConfig& compression_cfg,
-    void* ctx) {
+    unsigned char* input, unsigned char* output, int num_elems, DataType dtype,
+    bool add, const CompressionModuleConfig& compression_cfg, void* ctx) {
   if (num_elems == 0)
     return;
   cudaStream_t* stream = (cudaStream_t*)ctx;
@@ -350,7 +352,7 @@ size_t GPUNormalizedQuantizer::CompressBuffer(
           levels_type_, *stream);
     } else {
       cuda::CUDA_quantize_Norm<Half>(input, output, feedback,
-                                     bits_to_levels_fp16_[bits],
+                                     (Half*)bits_to_levels_[bits],
                                      num_elems_compress, bits, bucket_size,
                                      gpu_compression_context_->cuda_states_,
                                      norm_type_, levels_type_, *stream);
@@ -368,9 +370,8 @@ size_t GPUNormalizedQuantizer::CompressBuffer(
 }
 
 void GPUNormalizedQuantizer::DecompressBuffer(
-    unsigned char* input, unsigned char* output, int num_elems,
-    DataType dtype, bool add, const CompressionModuleConfig& compression_cfg,
-    void* ctx) {
+    unsigned char* input, unsigned char* output, int num_elems, DataType dtype,
+    bool add, const CompressionModuleConfig& compression_cfg, void* ctx) {
   if (num_elems <= 0)
     return;
   const int bits = compression_cfg.quantization_bits;
@@ -392,7 +393,7 @@ void GPUNormalizedQuantizer::DecompressBuffer(
             bucket_size, levels_type_, *stream);
       } else {
         cuda::CUDA_dequantize_Norm<Half, true>(
-            input, output, bits_to_levels_fp16_[bits], num_elems_decompress,
+            input, output, (Half*)bits_to_levels_[bits], num_elems_decompress,
             bits, bucket_size, levels_type_, *stream);
       }
     } else {
@@ -402,7 +403,7 @@ void GPUNormalizedQuantizer::DecompressBuffer(
             bucket_size, levels_type_, *stream);
       } else {
         cuda::CUDA_dequantize_Norm<Half, false>(
-            input, output, bits_to_levels_fp16_[bits], num_elems_decompress,
+            input, output, (Half*)bits_to_levels_[bits], num_elems_decompress,
             bits, bucket_size, levels_type_, *stream);
       }
     }
@@ -454,9 +455,9 @@ size_t GPUTopKCompressor::GetRequiredFreeSize() {
   return result;
 }
 
-size_t GPUTopKCompressor::BufferSize(
-    int num_elems, DataType dtype,
-    const CompressionModuleConfig& compression_cfg) {
+size_t
+GPUTopKCompressor::BufferSize(int num_elems, DataType dtype,
+                              const CompressionModuleConfig& compression_cfg) {
   int num_result = ceil(num_elems * topk_ratio_);
   return num_result * (sizeof(unsigned int) + get_sizeof(dtype));
 }
@@ -469,14 +470,14 @@ size_t GPUTopKCompressor::CompressBuffer(
     return 0;
   cudaStream_t* stream = (cudaStream_t*)ctx;
   int num_result = ceil(num_elems * topk_ratio_);
-//  int num_result = 10;
+  //  int num_result = 10;
 
   if (dtype == DataType::HOROVOD_FLOAT32) {
-    cuda::CUDA_topk_compress<float>(input, output, utility_buf_, feedback, num_elems,
-                                    num_result, *stream);
+    cuda::CUDA_topk_compress<float>(input, output, utility_buf_, feedback,
+                                    num_elems, num_result, *stream);
   } else if (dtype == DataType::HOROVOD_FLOAT16) {
-    cuda::CUDA_topk_compress<Half>(input, output, utility_buf_, feedback, num_elems,
-                                   num_result, *stream);
+    cuda::CUDA_topk_compress<Half>(input, output, utility_buf_, feedback,
+                                   num_elems, num_result, *stream);
   }
   CUDA_CHECK(cudaStreamSynchronize(*stream));
   return BufferSize(num_elems, dtype, compression_cfg);
@@ -489,7 +490,7 @@ void GPUTopKCompressor::DecompressBuffer(
     return;
   cudaStream_t* stream = (cudaStream_t*)ctx;
   int num_result = ceil(num_elems * topk_ratio_);
-//  int num_result = 10;
+  //  int num_result = 10;
   if (add) {
     if (dtype != DataType::HOROVOD_FLOAT16) {
       cuda::CUDA_topk_decompress<float, true>(input, output, num_elems,

@@ -32,6 +32,10 @@ int64_t HorovodOp::NumElements(std::vector<TensorTableEntry>& entries) const {
   return num_elements;
 }
 
+bool HorovodOp::GlobalEnabled(const ParameterManager& param_manager) const {
+    return true;
+}
+
 // Allreduce
 AllreduceOp::AllreduceOp(HorovodGlobalState* global_state)
     : HorovodOp(global_state) {}

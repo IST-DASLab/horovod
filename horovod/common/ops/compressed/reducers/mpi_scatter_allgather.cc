@@ -28,10 +28,12 @@ Status MPI_Allreduce_ScatterReduceAllgather::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size =
-      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
-  chunk_size =
-      ALIGNED_SIZE((tensor_fusion_threshold_ + world_size - 1) / world_size);
+  int rank = global_state_->controller->GetRank();
+  required_size =
+      std::max(std::max(entries[0].tensor->size(), tensor_fusion_threshold_),
+               required_size);
+  int64_t chunk_size = required_size;
+  chunk_size = ALIGNED_SIZE((chunk_size + world_size - 1) / world_size);
   int64_t buffer_size = chunk_size * (world_size - 1) +
                         +chunk_size * (world_size - 1) + chunk_size;
 
@@ -63,7 +65,6 @@ Status MPI_Allreduce_ScatterReduceAllgather::Init(
 Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     int num_elements, std::vector<TensorTableEntry>& entries,
     unsigned char* buffer_ptr) {
-
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   std::vector<int> chunk_sizes, offsets;
@@ -211,7 +212,8 @@ void printDebug(float* bf, int num_elems, int device, std::string prefix) {
     ss << host_buf[i] << " ";
   }
   ss << std::endl;
-  LOG(DEBUG) << ss.str();
+  //  LOG(DEBUG) << ss.str();
+  std::cout << ss.str() << std::endl;
   if (device != CPU_DEVICE_ID)
     delete[] host_buf;
 }

@@ -45,7 +45,8 @@ MPI_CompressedAllReduce::MPI_CompressedAllReduce(
                                      compression_type, norm_type, levels_type);
       break;
     case CompressionType::TopK:
-      break;
+      LOG(INFO) << "TopK is not supported for CPU-based tensors";
+      return;
     default:
       throw std::logic_error("Invalid compression type.");
     }
@@ -126,8 +127,13 @@ Status MPI_CompressedAllReduce::Execute(std::vector<TensorTableEntry>& entries,
   return status;
 }
 
+bool MPI_CompressedAllReduce::GlobalEnabled(
+    const ParameterManager& param_manager) const {
+  return reducer_ != nullptr and MPIAllreduce::GlobalEnabled(param_manager);
+}
+
 bool MPI_CompressedAllReduce::EnabledName(const std::string& name) const {
-  if (reducer_ != nullptr and compressor_ != nullptr) {
+  if (GlobalEnabled(global_state_->parameter_manager)) {
     for (auto& ignore : compressor_->GetIgnoreModules()) {
       if (name.find(ignore) != std::string::npos)
         return false;
@@ -140,15 +146,15 @@ bool MPI_CompressedAllReduce::Enabled(
     const horovod::common::ParameterManager& param_manager,
     const std::vector<horovod::common::TensorTableEntry>& entries,
     const horovod::common::Response& response) const {
-  if (reducer_ == nullptr ||
-      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *
-              sizeof(float) <
-          BUFFER_THRESHOLD ||
-      entries[0].tensor->dtype() != HOROVOD_FLOAT32 ||
-      entries[0].device != CPU_DEVICE_ID) {
-    return false;
-  }
-  return MPIAllreduce::Enabled(param_manager, entries, response);
+  return false;
+//  if (reducer_ == nullptr ||
+//      NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) <
+//          BUFFER_THRESHOLD ||
+//      entries[0].tensor->dtype() != HOROVOD_FLOAT32 ||
+//      entries[0].device != CPU_DEVICE_ID) {
+//    return false;
+//  }
+//  return MPIAllreduce::Enabled(param_manager, entries, response);
 }
 
 } // namespace common

@@ -25,6 +25,8 @@ public:
   bool Enabled(const ParameterManager& param_manager,
                const std::vector<TensorTableEntry>& entries,
                const Response& response) const override;
+  bool GlobalEnabled(const ParameterManager& param_manager) const override;
+
   bool EnabledName(const std::string& name) const;
 protected:
   NCCLReducer *reducer_;

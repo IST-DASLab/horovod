@@ -89,6 +89,7 @@ Status MPI_Allreduce_AllGather::AllreduceDivision(
       MPI_Waitall((int)requests.size(), requests.data(), MPI_STATUSES_IGNORE));
   timeline.ActivityEndAll(entries);
   timeline.ActivityStartAll(entries, Q_DECOMPRESSION);
+  CUDA_CHECK(cudaDeviceSynchronize());
   compressor_->Decompress(gradients_send_, buffer_ptr, entries, 0, num_elements,
                           false, (void*)&stream);
   for (int i = 0; i < world_size - 1; i++) {

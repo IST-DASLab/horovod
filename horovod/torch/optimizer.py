@@ -22,9 +22,9 @@ from contextlib import contextmanager
 import torch
 
 from horovod.torch.compression import Compression
-from horovod.torch.mpi_ops import allreduce_async_
+from horovod.torch.mpi_ops import allreduce_async_, allgather_async
 from horovod.torch.mpi_ops import synchronize
-from horovod.torch.mpi_ops import size
+from horovod.torch.mpi_ops import size, rank
 from horovod.torch.mpi_ops import Average, Adasum, Sum
 from horovod.torch.mpi_ops import rocm_built
 
@@ -70,11 +70,21 @@ class _DistributedOptimizer(torch.optim.Optimizer):
         self.op = op
         self.gradient_predivide_factor = gradient_predivide_factor
         self._handles = {}
+        self._allgather_handles = {}
         self._grad_accs = []
         self._requires_update = set()
         self._synchronized = False
         self._should_synchronize = True
         self._step = 0
+        directory = "grad_diff"
+        bits = os.getenv("HOROVOD_QUANTIZATION_BITS")
+        subdir = "MPI_maxmin_{}".format(bits)
+        self.files = {}
+        if rank() == 0:
+            os.makedirs(os.path.join(directory, subdir), exist_ok=True)
+            for k, v in named_parameters:
+                self.files[v] = open(os.path.join(directory, subdir, k), 'w')
+        self.freq = int(os.getenv("GRAD_DIFF_FREQ"))
         if size() > 1 or os.environ.get('HOROVOD_ELASTIC') == '1':
             self._register_hooks()
 
@@ -125,7 +135,8 @@ class _DistributedOptimizer(torch.optim.Optimizer):
         else:
             prescale_factor = 1.0
             postscale_factor = 1.0
-
+        if self._step % self.freq == self.freq - 1:
+            self._allgather_handles[p] = allgather_async(tensor_compressed.detach().clone(), name=name)
         handle = allreduce_async_(tensor_compressed, name=name, op=self.op,
                                   prescale_factor=prescale_factor,
                                   postscale_factor=postscale_factor)
@@ -161,6 +172,14 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                 self._handles[p] = (handle, ctx)
         for p, (handle, ctx) in self._handles.items():
             output = synchronize(handle)
+            if self._step % self.freq == self.freq - 1:
+                arr = synchronize(self._allgather_handles[p]).view(-1, *output.shape)
+                expected_res = torch.mean(arr, dim=0)
+                if rank() == 0:
+                    l2_diff = torch.norm(output - expected_res, p=2).item()
+                    linf_diff = torch.norm(output - expected_res, p=float("inf")).item()
+                    self.files[p].write("{} {}\n".format(l2_diff, linf_diff))
+                    self.files[p].flush()
             self._allreduce_delay[p] = self.backward_passes_per_step
             p.grad.copy_(self._compression.decompress(output, ctx))
         self._handles.clear()

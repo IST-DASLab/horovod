@@ -15,11 +15,10 @@ public:
   template<typename T>
   void Add(T* x, TensorTableEntry& entry, int num_elems) {
     device_ = entry.device;
-    auto data = ((T*)entry.tensor->data());
+    auto data = ((T*)entry.output->data());
     Add(data, x, data, num_elems);
   }
 
-  // If copy is true, save result of sum to y.
   virtual void Add(float* x, float* y, float* sum, int num_elems) = 0;
   virtual void Add(Half* x, Half* y, Half* sum, int num_elems) = 0;
 

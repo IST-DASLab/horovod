@@ -68,7 +68,7 @@ MPI_GPUCompressedAllReduce::MPI_GPUCompressedAllReduce(
   } else {
     if (global_state->controller->GetSize() !=
         global_state->controller->GetLocalSize()) {
-      throw std::logic_error("SHM_Allreduce_ScatterReduceAllgather is not "
+      throw std::logic_error("Shared memory communicator is not "
                              "available in multi-node setting.");
     }
     switch (reduction_type) {
@@ -101,7 +101,7 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
   if (!status.ok()) {
     return status;
   }
-  compressor_->ApplyErrorFeedback(entries);
+//  compressor_->ApplyErrorFeedback(entries);
   const void* fused_input_data;
   void* buffer_ptr = nullptr;
   if (compressor_->GetCompressionMode() != CompressionMode::NonFused) {
@@ -110,11 +110,10 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
     } else {
       size_t dummy;
       MemcpyInFusionBuffer(entries, fused_input_data, buffer_ptr, dummy);
+      CUDA_CHECK(cudaStreamSynchronize(
+          gpu_context_
+              ->streams[global_state_->current_nccl_stream][entries[0].device]));
     }
-
-    CUDA_CHECK(cudaStreamSynchronize(
-        gpu_context_
-            ->streams[global_state_->current_nccl_stream][entries[0].device]));
   }
   status = reducer_->AllreduceDivision(num_elements, entries,
                                        (unsigned char*)buffer_ptr);
@@ -153,17 +152,16 @@ bool MPI_GPUCompressedAllReduce::Enabled(
     const horovod::common::ParameterManager& param_manager,
     const std::vector<TensorTableEntry>& entries,
     const horovod::common::Response& response) const {
-  size_t free = 50, total;
-  cudaDeviceSynchronize();
-  cuMemGetInfo(&free, &total);
-  size_t need_free = (reducer_ != nullptr and !reducer_->isInitialized())
-                         ? reducer_->GetRequiredFreeSize()
-                         : 0;
-  //  size_t need_free = 0;
-  need_free += (compressor_ != nullptr and !compressor_->isInitialized())
-                   ? compressor_->GetRequiredFreeSize()
-                   : 0;
-  int result = 1;
+  //  size_t free = 50, total;
+  //  cuMemGetInfo(&free, &total);
+  //  size_t need_free = (reducer_ != nullptr and !reducer_->isInitialized())
+  //                         ? reducer_->GetRequiredFreeSize()
+  //                         : 0;
+  //  //  size_t need_free = 0;
+  //  need_free += (compressor_ != nullptr and !compressor_->isInitialized())
+  //                   ? compressor_->GetRequiredFreeSize()
+  //                   : 0;
+  //  int result = 1;
   if (reducer_ == nullptr ||
       NumElements(const_cast<std::vector<TensorTableEntry>&>(entries)) *
               sizeof(float) <
@@ -171,25 +169,32 @@ bool MPI_GPUCompressedAllReduce::Enabled(
       !EnabledName(entries[0].tensor_name) ||
       !(entries[0].tensor->dtype() == HOROVOD_FLOAT32 ||
         entries[0].tensor->dtype() == HOROVOD_FLOAT16) ||
-      entries[0].device == CPU_DEVICE_ID || need_free > free) {
-    result = 0;
+      entries[0].device == CPU_DEVICE_ID) {
+    return false;
   }
-  if (need_free > 0) {
-    MPI_Allreduce((void*)&result, (void*)&result, 1, MPI_INT, MPI_SUM,
-                  MPI_COMM_WORLD);
-    if (result < global_state_->controller->GetSize()) {
-      if (need_free > free) {
-        LOG(DEBUG) << "Switch to nccl due to lack of memory";
-      }
-      return false;
-    }
-  }
-  return (result != 0) &&
-         GPUAllreduce::Enabled(param_manager, entries, response);
+  //  if (need_free > free) {
+  //    result = 0;
+  //  }
+  //  if (need_free > 0) {
+  //    MPI_Allreduce((void*)&result, (void*)&result, 1, MPI_INT, MPI_SUM,
+  //                  MPI_COMM_WORLD);
+  //    if (result < global_state_->controller->GetSize()) {
+  //      if (need_free > free) {
+  //        LOG(DEBUG) << "Switch to nccl due to lack of memory";
+  //      }
+  //      return false;
+  //    }
+  //  }
+  return GPUAllreduce::Enabled(param_manager, entries, response);
+}
+
+bool MPI_GPUCompressedAllReduce::GlobalEnabled(
+    const ParameterManager& param_manager) const {
+  return reducer_ != nullptr and GPUAllreduce::GlobalEnabled(param_manager);
 }
 
 bool MPI_GPUCompressedAllReduce::EnabledName(const std::string& name) const {
-  if (reducer_ != nullptr and compressor_ != nullptr) {
+  if (GlobalEnabled(global_state_->parameter_manager)) {
     for (auto& ignore : compressor_->GetIgnoreModules()) {
       if (name.find(ignore) != std::string::npos)
         return false;

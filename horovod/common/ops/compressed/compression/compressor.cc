@@ -136,12 +136,11 @@ size_t Compressor::Compress(
     const std::vector<horovod::common::TensorTableEntry>& entries,
     int fusion_offset, int chunk_num_elems, bool disable_error_feedback,
     void* ctx) {
-  CUDA_CHECK(cudaStreamSynchronize(*((cudaStream_t*)ctx)));
   auto dtype = entries[0].tensor->dtype();
   if (compression_mode_ == CompressionMode::Fused) {
     unsigned char* feedback_data = nullptr;
     if (!disable_error_feedback && error_feedback_.isEnabled()) {
-      if (entries.size() == 0) {
+      if (entries.size() == 1) {
         feedback_data = error_feedback_.GetData(entries[0]) +
                         fusion_offset * get_sizeof(dtype);
       } else {
@@ -230,7 +229,7 @@ size_t Compressor::CompressPerEntry(
       feedback_data =
           error_feedback_.GetData(entry) + entry_offset * get_sizeof(dtype);
     compressed_size =
-        CompressBuffer(input_data + offset, feedback_data, output, nelem, dtype,
+        CompressBuffer(input_data + offset, output, feedback_data, nelem, dtype,
                        GetModuleConfig(entry.tensor_name), ctx);
     offset_cumm += entry.tensor->shape().num_elements();
     output += compressed_size;

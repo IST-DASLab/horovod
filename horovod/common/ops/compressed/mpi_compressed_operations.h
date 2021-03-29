@@ -22,6 +22,7 @@ public:
                const Response& response) const override;
   bool EnabledName(const std::string& name) const;
 
+  bool GlobalEnabled(const ParameterManager& param_manager) const override;
 protected:
   MPIReducer *reducer_;
   Compressor *compressor_;

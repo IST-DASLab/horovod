@@ -906,9 +906,11 @@ int horovod_reduce_op_adasum() {
   return ReduceOp::ADASUM;
 }
 
+#if GRAD_COMPRESSION
 void horovod_set_quantization_levels(float* levels, int bits) {
   SetQuantizationLevels(levels, bits);
 }
+#endif
 
 }
 

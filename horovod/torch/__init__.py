@@ -41,7 +41,7 @@ from horovod.torch.mpi_ops import nccl_built, ddl_built, ccl_built, cuda_built, 
 from horovod.torch.mpi_ops import Average, Sum, Adasum
 from horovod.torch.optimizer import DistributedOptimizer
 from horovod.torch.sync_batch_norm import SyncBatchNorm
-from horovod.torch.mpi_ops import set_quantization_levels
+# from horovod.torch.mpi_ops import set_quantization_levels
 
 
 # Please run this function in a subprocess
