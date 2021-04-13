@@ -17,12 +17,7 @@ GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
   auto& first_entry = entries[0];
   device_ = first_entry.device;
   gpu_op_context_.InitGPU(entries);
-  bool need_reinitialize = entries[0].tensor->size() > required_size;
-  required_size = std::max(
-      std::max(entries[0].tensor->size(),
-               global_state_->parameter_manager.TensorFusionThresholdBytes()),
-      required_size);
-  int chunk_size = required_size;
+  int chunk_size = global_state_->parameter_manager.TensorFusionThresholdBytes();
   int num_elems_in_chunk =
       ceil(((double)chunk_size) / get_sizeof(first_entry.tensor->dtype()));
   size_t curand_array_size =
@@ -39,7 +34,7 @@ GPUCompressionContext::Init(const std::vector<TensorTableEntry>& entries) {
   auto buffer =
       bufferManager_.GetBuffer(device_, first_entry.context->framework(),
                                global_state_->current_nccl_stream);
-  if (need_reinitialize) {
+  if (cuda_states_ == nullptr) {
     cuda_states_ = static_cast<CurandState*>(
         const_cast<void*>(buffer->AccessData(first_entry.context)));
     cuda::CUDA_init_curand(

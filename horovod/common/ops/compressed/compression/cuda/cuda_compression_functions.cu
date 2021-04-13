@@ -12,27 +12,27 @@ template <typename T, bool EF, int BITS>
 inline __device__ unsigned char
 MaxMinEncodeValue(T input, T* feedback, unsigned char* meta_info, T rand) {
   T* maxmin = ((T*)meta_info);
-//  float min = type2float(maxmin[1]);
-//  float unit = type2float(maxmin[0]);
-//  if (unit < EPS) {
-//    return (1 << BITS) - 1;
-//  }
-//  float input_f = type2float(input);
-//  float d = ((input_f - min) / unit) + type2float(rand);
-//  unsigned char level = floor(d);
-//  if (EF)
-//    *feedback = float2type<T>(input_f - (min + unit * level));
-//  return level;
-  T min = maxmin[1];
-  T unit = maxmin[0];
-  if (lt(unit, (T)EPS)) {
+  float min = type2float(maxmin[1]);
+  float unit = type2float(maxmin[0]);
+  if (unit < EPS) {
     return (1 << BITS) - 1;
   }
-  T d = add(div(sub(input, min), unit), rand);
+  float input_f = type2float(input);
+  float d = ((input_f - min) / unit) + type2float(rand);
   unsigned char level = floor(d);
   if (EF)
-    *feedback = sub(input, add(min, mul_int(unit, (int)level)));
+    *feedback = float2type<T>(input_f - (min + unit * level));
   return level;
+//  T min = maxmin[1];
+//  T unit = maxmin[0];
+//  if (lt(unit, (T)EPS)) {
+//    return (1 << BITS) - 1;
+//  }
+//  T d = add(div(sub(input, min), unit), rand);
+//  unsigned char level = floor(d);
+//  if (EF)
+//    *feedback = sub(input, add(min, mul_int(unit, (int)level)));
+//  return level;
 }
 
 template <typename T>

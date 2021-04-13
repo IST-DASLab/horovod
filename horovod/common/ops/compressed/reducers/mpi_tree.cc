@@ -20,10 +20,8 @@ Status MPI_Allreduce_Tree::Init(
   comm_ = comm;
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
-  int64_t chunk_size =
-      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
-  int64_t buffer_size =
-      chunk_size + chunk_size + chunk_size + tensor_fusion_threshold_;
+  int64_t chunk_size = tensor_fusion_threshold_;
+  int64_t buffer_size = chunk_size + chunk_size + chunk_size;
   Status status = bufferManager_.InitializeBuffer(
       buffer_size, first_entry.device, first_entry.context,
       global_state_->current_nccl_stream,
@@ -53,7 +51,7 @@ size_t MPI_Allreduce_Tree::GetRequiredFreeSize() {
 
 Status MPI_Allreduce_Tree::AllreduceDivision(
     int num_elements, std::vector<horovod::common::TensorTableEntry>& entries,
-    unsigned char* buffer_ptr) {
+    unsigned char* buffer_ptr, int global_offset) {
   auto& first_entry = entries[0];
 
   const int world_size = global_state_->controller->GetSize();
@@ -79,7 +77,7 @@ Status MPI_Allreduce_Tree::AllreduceDivision(
     } else {
       peer_rank = rank - shift / 2;
       compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
-                            num_elements, false, &stream);
+                            global_offset, num_elements, false, &stream);
       CUDA_CHECK(cudaStreamSynchronize(stream));
       MPI_CHECK(MPI_Send(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR,
                          peer_rank, 0, comm_));
@@ -88,8 +86,8 @@ Status MPI_Allreduce_Tree::AllreduceDivision(
   }
 
   if (rank == 0) {
-    compressor_->Compress(buffer_ptr, gradients_send_, entries, 0, num_elements,
-                          false, &stream);
+    compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
+                          global_offset, num_elements, false, &stream);
     CUDA_CHECK(cudaStreamSynchronize(stream));
   }
   // Second round. Top-down. Propagate reduced values.
@@ -108,8 +106,8 @@ Status MPI_Allreduce_Tree::AllreduceDivision(
       }
     }
   }
-  compressor_->Decompress(gradients_send_, buffer_ptr, entries, 0,
-                          num_elements, false, &stream);
+  compressor_->Decompress(gradients_send_, buffer_ptr, entries, 0, num_elements,
+                          false, &stream);
   CUDA_CHECK(cudaStreamSynchronize(stream));
   return Status::OK();
 }

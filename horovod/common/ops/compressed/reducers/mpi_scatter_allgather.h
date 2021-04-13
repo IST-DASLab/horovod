@@ -31,11 +31,12 @@ public:
 
   Status AllreduceDivision(int num_elements,
                            std::vector<TensorTableEntry>& entries,
-                           unsigned char* buffer_ptr) override;
+                           unsigned char* buffer_ptr,
+                           int global_offset) override;
 
-  Status Init(const std::vector<TensorTableEntry>& entries, MPI_Comm comm) override;
+  Status Init(const std::vector<TensorTableEntry>& entries,
+              MPI_Comm comm) override;
   virtual size_t GetRequiredFreeSize() override;
-  int64_t required_size = 0;
 };
 
 } // namespace common

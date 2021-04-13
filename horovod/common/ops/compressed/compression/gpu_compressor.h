@@ -20,7 +20,6 @@ public:
   CurandState* cuda_states_ = nullptr;
   int device_;
   FusionBufferManager bufferManager_;
-  int64_t required_size = 0;
 };
 
 class GPUDummyCompressor : public DummyCompressor {

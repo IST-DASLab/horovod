@@ -49,7 +49,7 @@ parser.add_argument('--use-torch-ddp', action='store_true', default=False,
 parser.add_argument("--data-loader", type=str, choices=["synthetic", "dali-cpu"], default="dali-cpu")
 parser.add_argument('--workers', type=int, default=4,
                     help='number of dataloader workers')
-parser.add_argument('--dataset-dir', default='imagenet',
+parser.add_argument('--dataset-dir', default='./imagenet',
                     help='path to training data')
 
 args = parser.parse_args()

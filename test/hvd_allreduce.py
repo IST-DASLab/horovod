@@ -154,18 +154,10 @@ def run_allreduce(args, num, res):
         #print(avg_tensor[:8])
         #avg_tensor = tensors[i]
         avg = avg_tensor.cpu().numpy()
-        # log("Base sum: {}".format(res[:8]))
-        # log("Hvd: {}".format(avg[:8]))
-        # log("Expected: {}".format(get_array(hvd.size())[:8]))
         if hvd.rank() == 0:
-            # print("Base sum: ", result[:8])
-            # print("Hvd: ", avg[:8])
             diff = np.linalg.norm(res - avg)
-            # idx = np.where(np.abs(res - avg) > 1e-2)
-            # print(idx)
-            # print("Hvd: {}, res: {}".format(avg[idx], res[idx]))
-            log("L2 error: {}".format(diff))
             if diff > res.size * 5e-2:
+                log("L2 error: {}".format(diff))
                 log("Base sum: {}".format(res[:8]))
                 log("Hvd: {}".format(avg[:8]))
                 hvd.broadcast_object(False, 0, "Result")
@@ -191,8 +183,8 @@ parser.add_argument('--bucket-size', type=int, default=512, help="quantization b
 
 args = parser.parse_args()
 
-os.environ["HOROVOD_QUANTIZATION_BITS"] = str(args.q)
-os.environ["HOROVOD_COMPRESSION_BUCKET_SIZE"] = str(args.bucket_size)
+# os.environ["HOROVOD_QUANTIZATION_BITS"] = str(args.q)
+# os.environ["HOROVOD_COMPRESSION_BUCKET_SIZE"] = str(args.bucket_size)
 hvd.init()
 num_nodes = hvd.size()
 torch.cuda.set_device(hvd.rank())
@@ -202,8 +194,8 @@ generate_arrays(args.array_size)
 # res = res.cpu().numpy()
 res = None
 
-num_layers = 5
-num_batches = 3
+num_layers = 1
+num_batches = 100
 for i in range(num_batches):
     if not run_allreduce(args, num_layers, res):
         log("Failed")

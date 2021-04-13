@@ -29,8 +29,7 @@ Status NCCL_Allreduce_Ring::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size =
-      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
+  int64_t chunk_size = tensor_fusion_threshold_;
   chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
   int64_t buffer_size = chunk_size * world_size + chunk_size + chunk_size;
   Status status = bufferManager_.InitializeBuffer(
@@ -64,7 +63,7 @@ Status NCCL_Allreduce_Ring::Init(
 Status NCCL_Allreduce_Ring::AllreduceDivision(
     int num_elements, ncclComm_t* nccl_comm_,
     std::vector<horovod::common::TensorTableEntry>& entries,
-    unsigned char* buffer_ptr) {
+    unsigned char* buffer_ptr, int global_offset) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   std::vector<int> chunk_sizes, offsets;
@@ -87,7 +86,7 @@ Status NCCL_Allreduce_Ring::AllreduceDivision(
     recv_size = ALIGNED_SIZE(compressor_->BufferSize(
         chunk_sizes[recv_segment_idx], entries, buf_recv_idx));
     send_size = ALIGNED_SIZE(compressor_->Compress(
-        buffer_ptr, gradients_send_, entries, buf_send_idx,
+        buffer_ptr, gradients_send_, entries, buf_send_idx, global_offset,
         chunk_sizes[send_segment_idx], false, stream_));
     NCCL_CALL_CHECK("ncclGroupStart", ncclGroupStart(), *nccl_comm_);
     NCCL_CALL_CHECK("ncclSend",
@@ -106,9 +105,9 @@ Status NCCL_Allreduce_Ring::AllreduceDivision(
   send_segment_idx = (rank + world_size + 1) % world_size;
   buf_send_idx = offsets[send_segment_idx];
   unsigned char* send_buf = gradients_send_;
-  send_size = ALIGNED_SIZE(
-      compressor_->Compress(buffer_ptr, send_buf, entries, buf_send_idx,
-                            chunk_sizes[send_segment_idx], true, stream_));
+  send_size = ALIGNED_SIZE(compressor_->Compress(
+      buffer_ptr, send_buf, entries, buf_send_idx, global_offset,
+      chunk_sizes[send_segment_idx], true, stream_));
   compressor_->Decompress(send_buf, buffer_ptr, entries, buf_send_idx,
                           chunk_sizes[send_segment_idx], false, stream_);
 

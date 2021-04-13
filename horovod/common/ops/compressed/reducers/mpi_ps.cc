@@ -27,8 +27,7 @@ Status MPI_Allreduce_PS::Init(
   auto& first_entry = entries[0];
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
-  int64_t chunk_size =
-      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
+  int64_t chunk_size = tensor_fusion_threshold_;
   int64_t buffer_size = chunk_size + chunk_size * (world_size - 1);
 
   auto status = bufferManager_.InitializeBuffer(
@@ -55,7 +54,7 @@ Status MPI_Allreduce_PS::Init(
 
 Status MPI_Allreduce_PS::AllreduceDivision(
     int num_elements, std::vector<horovod::common::TensorTableEntry>& entries,
-    unsigned char* buffer_ptr) {
+    unsigned char* buffer_ptr, int global_offset) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   auto& timeline = global_state_->timeline;
@@ -94,12 +93,13 @@ Status MPI_Allreduce_PS::AllreduceDivision(
 
     // Second round.
     // Broadcast the result
-    compressor_->Compress(buffer_ptr, gradients_send_, entries, 0, num_elements,
-                          true, &stream);
+    compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
+                          global_offset, num_elements, true, &stream);
     CUDA_CHECK(cudaStreamSynchronize(stream));
   } else {
-    send_rcv_size = ALIGNED_SIZE(compressor_->Compress(
-        buffer_ptr, gradients_send_, entries, 0, num_elements, false, &stream));
+    send_rcv_size = ALIGNED_SIZE(
+        compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
+                              global_offset, num_elements, false, &stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     MPI_CHECK(MPI_Send(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, 0,
                        comm_));

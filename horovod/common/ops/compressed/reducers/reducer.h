@@ -31,6 +31,7 @@ public:
   }
   virtual size_t GetRequiredFreeSize() = 0;
   bool isInitialized() { return initialized_; }
+
 protected:
   HorovodGlobalState* global_state_;
 
@@ -59,7 +60,8 @@ public:
 
   virtual Status AllreduceDivision(int num_elements,
                                    std::vector<TensorTableEntry>& entries,
-                                   unsigned char* buffer_ptr) = 0;
+                                   unsigned char* buffer_ptr,
+                                   int global_offset) = 0;
 
 protected:
   MPIContext* mpi_context_;
@@ -82,7 +84,8 @@ public:
 
   virtual Status AllreduceDivision(int num_elements, ncclComm_t* nccl_comm,
                                    std::vector<TensorTableEntry>& entries,
-                                   unsigned char* buffer_ptr) = 0;
+                                   unsigned char* buffer_ptr,
+                                   int global_offset) = 0;
 
 protected:
   NCCLContext* nccl_context_;

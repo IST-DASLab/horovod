@@ -134,7 +134,7 @@ size_t Compressor::BufferSize(
 size_t Compressor::Compress(
     unsigned char* input_data, unsigned char* output,
     const std::vector<horovod::common::TensorTableEntry>& entries,
-    int fusion_offset, int chunk_num_elems, bool disable_error_feedback,
+    int fusion_offset, int global_offset, int chunk_num_elems, bool disable_error_feedback,
     void* ctx) {
   auto dtype = entries[0].tensor->dtype();
   if (compression_mode_ == CompressionMode::Fused) {
@@ -142,7 +142,7 @@ size_t Compressor::Compress(
     if (!disable_error_feedback && error_feedback_.isEnabled()) {
       if (entries.size() == 1) {
         feedback_data = error_feedback_.GetData(entries[0]) +
-                        fusion_offset * get_sizeof(dtype);
+            (fusion_offset + global_offset) * get_sizeof(dtype);
       } else {
         feedback_data = fused_feedback_buf;
       }

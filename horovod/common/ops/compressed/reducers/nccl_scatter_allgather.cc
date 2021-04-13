@@ -29,8 +29,7 @@ Status NCCL_Allreduce_ScatterAllgather::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size =
-    std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
+  int64_t chunk_size = tensor_fusion_threshold_;
   chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
   int64_t buffer_size = chunk_size * (world_size - 1) +
                         chunk_size * (world_size - 1) + chunk_size;
@@ -66,7 +65,7 @@ Status NCCL_Allreduce_ScatterAllgather::Init(
 
 Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     int num_elements, ncclComm_t* comm, std::vector<TensorTableEntry>& entries,
-    unsigned char* buffer_ptr) {
+    unsigned char* buffer_ptr, int global_offset) {
 
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
@@ -93,7 +92,7 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     send_num_elems = chunk_sizes[node_rank];
     send_compressed_size = ALIGNED_SIZE(
         compressor_->Compress(buffer_ptr, send_buf, entries, start_offset,
-                              send_num_elems, false, stream_));
+                              global_offset, send_num_elems, false, stream_));
     send_buf += send_compressed_size;
     send_sizes.push(send_compressed_size);
   }
@@ -134,7 +133,7 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
   }
 
   compressor_->Compress(buffer_ptr, gradients_send_, entries, start_elem,
-                        recv_num_elems, true, stream_);
+                        global_offset, recv_num_elems, true, stream_);
   compressor_->Decompress(gradients_send_, buffer_ptr, entries, start_elem,
                           recv_num_elems, false, stream_);
   if (timeline.Initialized()) {
@@ -152,8 +151,8 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     }
     int their_start_offset = offsets[node_rank];
     recv_num_elems = chunk_sizes[node_rank];
-    recv_compressed_size = ALIGNED_SIZE(compressor_->BufferSize(
-        recv_num_elems, entries, their_start_offset));
+    recv_compressed_size = ALIGNED_SIZE(
+        compressor_->BufferSize(recv_num_elems, entries, their_start_offset));
     NCCL_CALL_CHECK("ncclRecv",
                     ncclRecv(recv_buf, recv_compressed_size, ncclChar,
                              node_rank, *comm, *stream_),
@@ -178,8 +177,8 @@ Status NCCL_Allreduce_ScatterAllgather::AllreduceDivision(
     // Offset of the received chunk
     int their_start_offset = offsets[node_rank];
     recv_num_elems = chunk_sizes[node_rank];
-    recv_compressed_size = ALIGNED_SIZE(compressor_->BufferSize(
-        recv_num_elems, entries, their_start_offset));
+    recv_compressed_size = ALIGNED_SIZE(
+        compressor_->BufferSize(recv_num_elems, entries, their_start_offset));
     compressor_->Decompress(recv_buf, buffer_ptr, entries, their_start_offset,
                             recv_num_elems, false, stream_);
     recv_buf += recv_compressed_size;

@@ -29,7 +29,7 @@ public:
 
   size_t Compress(unsigned char* input_data, unsigned char* output,
                   const std::vector<TensorTableEntry>& entries,
-                  int fusion_offset, int chunk_num_elems,
+                  int fusion_offset, int global_offset, int chunk_num_elems,
                   bool disable_error_feedback, void* ctx);
   void Decompress(unsigned char* input_data, unsigned char* output,
                   const std::vector<TensorTableEntry>& entries,
@@ -62,6 +62,7 @@ public:
   bool isInitialized() const { return initialized_; }
   void ApplyErrorFeedback(std::vector<TensorTableEntry>& entries);
   CompressionMode GetCompressionMode() const { return compression_mode_; }
+  void SetCompressionMode(CompressionMode mode) { compression_mode_ = mode; }
 
 protected:
   const int MIN_SIZE_TO_COMPRESS = 16;

@@ -17,7 +17,7 @@ public:
   Status
   AllreduceDivision(int num_elements, ncclComm_t* nccl_comm_,
                     std::vector<horovod::common::TensorTableEntry>& entries,
-                    unsigned char* buffer_ptr) override;
+                    unsigned char* buffer_ptr, int global_offset) override;
   size_t GetRequiredFreeSize() override;
 };
 

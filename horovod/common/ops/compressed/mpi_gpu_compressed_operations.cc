@@ -101,24 +101,43 @@ Status MPI_GPUCompressedAllReduce::Allreduce(
   if (!status.ok()) {
     return status;
   }
-//  compressor_->ApplyErrorFeedback(entries);
+  compressor_->ApplyErrorFeedback(entries);
   const void* fused_input_data;
   void* buffer_ptr = nullptr;
-  if (compressor_->GetCompressionMode() != CompressionMode::NonFused) {
-    if (entries.size() == 1) {
-      buffer_ptr = (void*)entries[0].output->data();
-    } else {
-      size_t dummy;
-      MemcpyInFusionBuffer(entries, fused_input_data, buffer_ptr, dummy);
-      CUDA_CHECK(cudaStreamSynchronize(
-          gpu_context_
-              ->streams[global_state_->current_nccl_stream][entries[0].device]));
-    }
+  int dtype_size = get_sizeof(entries[0].tensor->dtype());
+  if (entries.size() == 1) {
+    buffer_ptr = (void*)entries[0].output->data();
+  } else if (compressor_->GetCompressionMode() != CompressionMode::NonFused) {
+    size_t dummy;
+    MemcpyInFusionBuffer(entries, fused_input_data, buffer_ptr, dummy);
+    CUDA_CHECK(cudaStreamSynchronize(
+        gpu_context_
+            ->streams[global_state_->current_nccl_stream][entries[0].device]));
   }
-  status = reducer_->AllreduceDivision(num_elements, entries,
-                                       (unsigned char*)buffer_ptr);
-  if (!status.ok()) {
-    return status;
+
+  int64_t max_buffer_size =
+      global_state_->parameter_manager.TensorFusionThresholdBytes() /
+      dtype_size;
+  if (num_elements > max_buffer_size) {
+    assert(entries.size() == 1);
+    auto mode = compressor_->GetCompressionMode();
+    compressor_->SetCompressionMode(CompressionMode::Fused);
+    for (int64_t offset = 0; offset < num_elements; offset += max_buffer_size) {
+      status = reducer_->AllreduceDivision(
+          std::min(max_buffer_size, num_elements - offset), entries,
+          static_cast<unsigned char*>(buffer_ptr) + offset * dtype_size,
+          offset);
+      if (!status.ok()) {
+        return status;
+      }
+    }
+    compressor_->SetCompressionMode(mode);
+  } else {
+    status = reducer_->AllreduceDivision(
+        num_elements, entries, static_cast<unsigned char*>(buffer_ptr), 0);
+    if (!status.ok()) {
+      return status;
+    }
   }
   if (compressor_->GetCompressionMode() != CompressionMode::NonFused and
       entries.size() > 1) {

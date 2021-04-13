@@ -27,8 +27,7 @@ Status MPI_Allreduce_Ring::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size =
-      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
+  int64_t chunk_size = tensor_fusion_threshold_;
   chunk_size = (tensor_fusion_threshold_ + world_size - 1) / world_size;
   int64_t buffer_size = chunk_size * world_size + chunk_size + chunk_size;
   Status status = bufferManager_.InitializeBuffer(
@@ -56,7 +55,7 @@ Status MPI_Allreduce_Ring::Init(
 
 Status MPI_Allreduce_Ring::AllreduceDivision(
     int num_elements, std::vector<horovod::common::TensorTableEntry>& entries,
-    unsigned char* buffer_ptr) {
+    unsigned char* buffer_ptr, int global_offset) {
   int rank = global_state_->controller->GetRank();
   int world_size = global_state_->controller->GetSize();
   std::vector<int> chunk_sizes, offsets;
@@ -87,7 +86,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
     MPI_CHECK(MPI_Irecv(gradients_recv_, recv_size, MPI_UNSIGNED_CHAR,
                         recv_from, 0, comm_, &recv_req));
     send_size = ALIGNED_SIZE(compressor_->Compress(
-        buffer_ptr, gradients_send_, entries, buf_send_idx,
+        buffer_ptr, gradients_send_, entries, buf_send_idx, global_offset,
         chunk_sizes[send_segment_idx], false, &stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
     MPI_CHECK(MPI_Send(gradients_send_, send_size, MPI_UNSIGNED_CHAR, send_to,
@@ -104,7 +103,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
   buf_send_idx = offsets[send_segment_idx];
   unsigned char* send_buf = gradients_send_;
   send_size = ALIGNED_SIZE(compressor_->Compress(
-      buffer_ptr, send_buf, entries, buf_send_idx,
+      buffer_ptr, send_buf, entries, buf_send_idx, global_offset,
       chunk_sizes[send_segment_idx], true, (void*)&stream));
   compressor_->Decompress(send_buf, buffer_ptr, entries, buf_send_idx,
                           chunk_sizes[send_segment_idx], false, (void*)&stream);

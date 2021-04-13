@@ -33,10 +33,8 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
   auto& first_entry = entries[0];
   auto& timeline = global_state_->timeline;
   int world_size = global_state_->controller->GetSize();
-  int64_t chunk_size =
-      std::max(entries[0].tensor->size(), tensor_fusion_threshold_);
-  chunk_size =
-      ALIGNED_SIZE((tensor_fusion_threshold_ + world_size - 1) / world_size);
+  int64_t chunk_size = tensor_fusion_threshold_;
+  chunk_size = ALIGNED_SIZE((chunk_size + world_size - 1) / world_size);
   int64_t buffer_size = chunk_size * world_size + chunk_size * (world_size - 1);
 
   // Allocate buffers used for compression/decompression.
@@ -98,7 +96,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::Init(
 
 Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     int num_elements, std::vector<TensorTableEntry>& entries,
-    unsigned char* buffer_ptr) {
+    unsigned char* buffer_ptr, int global_offset) {
   // Synchronize with error feedback.
   CUDA_CHECK(cudaStreamSynchronize(
       gpu_context_
@@ -129,9 +127,9 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     int start_offset = offsets[node_rank];
     send_num_elems = chunk_sizes[node_rank];
 
-    compressed_size = ALIGNED_SIZE(
-        compressor_->Compress(buffer_ptr, compressed_buf, entries, start_offset,
-                              send_num_elems, false, &streams_[node_rank]));
+    compressed_size = ALIGNED_SIZE(compressor_->Compress(
+        buffer_ptr, compressed_buf, entries, start_offset, global_offset,
+        send_num_elems, false, &streams_[node_rank]));
 
     hcomm_->Send(compressed_buf, compressed_size, node_rank,
                  streams_[node_rank]);
@@ -187,7 +185,7 @@ Status SHM_Allreduce_ScatterReduceAllgather::AllreduceDivision(
 
   // Second round of SRA.
   compressor_->Compress(buffer_ptr, compressed_buf, entries, start_elem,
-                        recv_num_elems, true, &streams_[rank]);
+                        global_offset, recv_num_elems, true, &streams_[rank]);
   CUDA_CHECK(cudaEventRecord(events_[rank], streams_[rank]));
   compressor_->Decompress(compressed_buf, buffer_ptr, entries, start_elem,
                           recv_num_elems, false, &streams_[rank]);
