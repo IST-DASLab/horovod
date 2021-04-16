@@ -2,7 +2,7 @@
 #define HOROVOD_VECTOR_OPERATIONS_H
 
 #include "../../gpu_operations.h"
-#include "cuda/cuda_arithmetic_functions.h"
+#include "gpu/cuda_arithmetic_functions.h"
 
 namespace horovod {
 namespace common {

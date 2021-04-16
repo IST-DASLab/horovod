@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include "../../message.h"
+#include "compression/gpu_compressor.h"
 
 namespace horovod {
 namespace common {
@@ -18,6 +19,12 @@ size_t round_to(size_t x, int64_t m);
 double time_since(std::chrono::time_point<clock_>& start_);
 
 int get_sizeof(DataType dtype);
+
+Compressor* CreateGPUCompressor(GPUContext* gpu_context,
+                                HorovodGlobalState* global_state,
+                                Summator* summator);
+
+float* FillLevels(int bits, int& size, CompressionType compression_type, LevelsType levels_type);
 
 } // namespace common
 } // namespace horovod

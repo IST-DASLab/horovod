@@ -1,12 +1,9 @@
-#ifndef HOROVOD_CUDA_RAND_H
-#define HOROVOD_CUDA_RAND_H
-
-#include <climits>
-#include "cuda_def.h"
+#ifndef GPU_RAND_UTIL_H_
+#define GPU_RAND_UTIL_H_
 
 namespace horovod {
 namespace common {
-namespace cuda {
+namespace gpu {
 
 __device__ int toInt(unsigned char* z) {
   return ((unsigned int)z[0] & 0xFF) << 24 | ((unsigned int)z[1] & 0xFF) << 16 |
@@ -57,16 +54,6 @@ inline __device__ xorshift128p_state xorshift128_init(uint64_t seed) {
   return result;
 }
 
-__global__ void _init_curand(unsigned int seed, CurandState* states) {
-  unsigned int index = threadIdx.x + blockIdx.x * blockDim.x;
-//    unsigned char z[4];
-//    for (int i = 0; i < 4; i++)
-//      z[i] = (seed + index) % 128;
-//    states[index] = toInt(z);
-  states[index] = xorshift128_init(seed * index);
-//  curand_init(seed, index, 1000, &states[index]);
-}
-
 inline __device__ float xorshift128p(xorshift128p_state* state) {
   uint64_t t = state->a;
   uint64_t s = state->b;
@@ -78,24 +65,7 @@ inline __device__ float xorshift128p(xorshift128p_state* state) {
   return (t + s) * 1.0;
 }
 
-__device__ float GetRand(CurandState* state_p) {
-//  return curand_uniform(state_p);
-  return ((float)xorshift128p(state_p)) / UINT64_MAX;
-//    return HybridTaus(state_p);
-}
-
-void CUDA_init_curand(CurandState* states, int num_elems, unsigned int seed,
-                      cudaStream_t stream) {
-  _init_curand<<<BLOCKS_PER_GRID(num_elems, THREADS_PER_BLOCK_COMPRESS), THREADS_PER_BLOCK_COMPRESS, 0,
-                 stream>>>(seed, states);
-}
-
-size_t CUDA_get_curand_array_size(int num_elems) {
-  return BLOCKS_PER_GRID(num_elems, THREADS_PER_BLOCK_COMPRESS) * THREADS_PER_BLOCK_COMPRESS *
-         sizeof(CurandState);
-}
-
-} // namespace cuda
+} // namespace gpu
 } // namespace common
 } // namespace horovod
-#endif // HOROVOD_CUDA_RAND_H
+#endif // GPU_RAND_UTIL_H_

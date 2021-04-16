@@ -3,7 +3,7 @@
 
 namespace horovod {
 namespace common {
-namespace cuda {
+namespace gpu {
 
 template <typename T>
 __global__ void _add(int64_t n, const T* x, const T* y, T* sum) {
@@ -38,6 +38,6 @@ template void CUDA_add<float>(int n, const float* x, float* y, float* sum,
 template void CUDA_add<Half>(int n, const Half* x, Half* y, Half* sum,
                              cudaStream_t stream);
 
-} // namespace cuda
+} // namespace gpu
 } // namespace common
 } // namespace horovod

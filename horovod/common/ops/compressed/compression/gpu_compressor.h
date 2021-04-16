@@ -17,7 +17,7 @@ public:
   GPUContext* gpu_context_;
   GPUOpContext gpu_op_context_;
   HorovodGlobalState* global_state_;
-  CurandState* cuda_states_ = nullptr;
+  GPURandState* cuda_states_ = nullptr;
   int device_;
   FusionBufferManager bufferManager_;
 };

@@ -1,11 +1,31 @@
 #include "cuda_compression_functions.h"
-#include "cuda_fp16_util.h"
 #include "cuda_rand.h"
+#include "fp16_util.h"
 
 namespace horovod {
 namespace common {
-namespace cuda {
+namespace gpu {
 using uint64_t = unsigned long long int;
+
+typedef union {
+  float4 vec;
+  float a[4];
+} F4;
+
+typedef union {
+  uchar2 vec;
+  unsigned char a[2];
+} U2;
+
+typedef union {
+  uchar3 vec;
+  unsigned char a[3];
+} U3;
+
+typedef union {
+  uchar4 vec;
+  unsigned char a[4];
+} U4;
 
 // Single value quantization functions
 template <typename T, bool EF, int BITS>
@@ -204,7 +224,7 @@ inline __device__ unsigned char
 EncodeValue(T input, T* feedback, unsigned char* meta_info, T rand, void* ctx) {
 
   switch (method) {
-  case CompressFunc::MaxMin:
+  case CompressFunc::MaxMinWide:
     return MaxMinEncodeValue<T, EF, BITS>(input, feedback, meta_info, rand);
   case CompressFunc::NormWide:
     return NormWideEncodeValue<T, EF, BITS>(input, feedback, meta_info, rand,
@@ -222,7 +242,7 @@ template <typename T, CompressFunc method, int BITS>
 inline __device__ T DecodeValue(unsigned char input, unsigned char* meta_info,
                                 unsigned int idx, int bucket_size, void* ctx) {
   switch (method) {
-  case CompressFunc::MaxMin:
+  case CompressFunc::MaxMinWide:
     return MaxMinDecodeValue<T>(input, meta_info, idx, bucket_size);
   case CompressFunc::NormWide:
     return NormWideDecodeValue<T, BITS>(input, meta_info, idx, bucket_size,
@@ -241,7 +261,7 @@ __device__ void find_meta_parallel(T* input, unsigned char* meta,
   unsigned int tid = threadIdx.x;
   unsigned int block_size = blockDim.x;
   T* meta_buf = (T*)meta;
-  const bool is_maxmin = FUNC == CompressFunc::MaxMin;
+  const bool is_maxmin = FUNC == CompressFunc::MaxMinWide;
   const int shared_size = MAX_THREADS_PER_BLOCK * (is_maxmin ? 2 : 1);
   extern __shared__ __align__(sizeof(T)) unsigned char my_smem[];
   T* sdata = reinterpret_cast<T*>(my_smem);
@@ -250,7 +270,7 @@ __device__ void find_meta_parallel(T* input, unsigned char* meta,
     meta_buf[1] = input[0];
   unsigned int num_iters_per_bucket = (num_elems + block_size - 1) / block_size;
   for (int i = 0; i < num_iters_per_bucket; i++) {
-    unsigned int idx = i * blockDim.x + tid;
+    unsigned int idx = i * block_size + tid;
     if (idx < num_elems) {
       if (is_maxmin) {
         sdata[tid] = input[idx];
@@ -369,7 +389,7 @@ pack_value<8>(const uint64_t value, unsigned char* output, unsigned int shift) {
 template <typename T, CompressFunc FUNC, bool EF, int BITS>
 __device__ void CompressBucket(T* input, unsigned char* output,
                                T* feedback_data, unsigned char* meta_info,
-                               int num_elems, CurandState* state, void* ctx) {
+                               int num_elems, GPURandState* state, void* ctx) {
   unsigned int tid = threadIdx.x;
   unsigned int num_threads = blockDim.x;
   float rand;
@@ -434,7 +454,7 @@ __device__ void CompressBucket(T* input, unsigned char* output,
 template <typename T, CompressFunc FUNC, NormType NORM, bool EF, int BITS>
 __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
                          unsigned char* feedback_data, int num_elems,
-                         int bucket_size, CurandState* states, void* ctx) {
+                         int bucket_size, GPURandState* states, void* ctx) {
   unsigned num_blocks = gridDim.x;
   unsigned int tid = threadIdx.x + blockIdx.x * blockDim.x;
   unsigned int bid = blockIdx.x;
@@ -442,7 +462,7 @@ __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
   unsigned int cur_bucket_size;
   T* meta = (T*)output_data;
   unsigned char* output;
-  const int META_MULTIPLIER = (FUNC == CompressFunc::MaxMin) ? 2 : 1;
+  const int META_MULTIPLIER = (FUNC == CompressFunc::MaxMinWide) ? 2 : 1;
   output = output_data + META_MULTIPLIER * sizeof(T) * num_buckets;
 
   unsigned int compressed_size =
@@ -455,7 +475,7 @@ __global__ void quantize(unsigned char* input_data, unsigned char* output_data,
         input + bucket_size * bucket_id,
         (unsigned char*)(meta + META_MULTIPLIER * bucket_id), cur_bucket_size);
   }
-  CurandState local_state = states[tid];
+  GPURandState local_state = states[tid];
   for (int bucket_id = bid; bucket_id < num_buckets; bucket_id += num_blocks) {
     cur_bucket_size = umin(bucket_size, num_elems - bucket_id * bucket_size);
     CompressBucket<T, FUNC, EF, BITS>(
@@ -591,15 +611,22 @@ __global__ void UnpackArray(unsigned char* input, unsigned char* meta_info,
   }
 }
 
-void CUDA_convert_to_halves(float* input, Half* output, int numel) {
-  float2half<<<numel, 1, 0, 0>>>(input, output, numel);
-  CUDA_CHECK(cudaStreamSynchronize(0));
+__global__ void float2half(float* input, __half* output, int numel) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+  for (int i = index; i < numel; i += stride) {
+    output[i] = __float2half(input[i]);
+  }
+}
+
+void CUDA_convert_to_halves(float* input, Half* output, int numel, cudaStream_t stream) {
+  float2half<<<1, numel, 0, stream>>>(input, output, numel);
 }
 
 template <typename T, CompressFunc FUNC, NormType NORM, bool EF>
 inline void QUANTIZE2(unsigned char* input_data, unsigned char* output_data,
                       unsigned char* feedback_data, int num_elems, int bits,
-                      int bucket_size, CurandState* states, cudaStream_t stream,
+                      int bucket_size, GPURandState* states, cudaStream_t stream,
                       void* ctx, int num_blocks, int num_threads,
                       int shared_memory_block_size) {
   switch (bits) {
@@ -660,7 +687,7 @@ inline void QUANTIZE2(unsigned char* input_data, unsigned char* output_data,
 template <typename T, CompressFunc FUNC, NormType NORM>
 inline void QUANTIZE1(unsigned char* input_data, unsigned char* output_data,
                       unsigned char* feedback_data, int num_elems, int bits,
-                      int bucket_size, CurandState* states, cudaStream_t stream,
+                      int bucket_size, GPURandState* states, cudaStream_t stream,
                       void* ctx, int num_blocks, int num_threads,
                       int shared_memory_block_size) {
   if (feedback_data == nullptr) {
@@ -677,13 +704,13 @@ inline void QUANTIZE1(unsigned char* input_data, unsigned char* output_data,
 template <typename T>
 void CUDA_quantize_maxmin(unsigned char* input_data, unsigned char* output_data,
                           unsigned char* feedback_data, int num_elems, int bits,
-                          int bucket_size, CurandState* states,
+                          int bucket_size, GPURandState* states,
                           cudaStream_t stream) {
   int num_blocks =
       umin((num_elems + bucket_size - 1) / bucket_size, MAX_NUMBER_OF_BLOCKS);
   int num_threads = umin(THREADS_PER_BLOCK_COMPRESS, bucket_size);
   int shared_memory_block_size = 2 * MAX_THREADS_PER_BLOCK * sizeof(T);
-  QUANTIZE1<T, CompressFunc::MaxMin, NormType::Linf>(
+  QUANTIZE1<T, CompressFunc::MaxMinWide, NormType::Linf>(
       input_data, output_data, feedback_data, num_elems, bits, bucket_size,
       states, stream, nullptr, num_blocks, num_threads,
       shared_memory_block_size);
@@ -692,7 +719,7 @@ void CUDA_quantize_maxmin(unsigned char* input_data, unsigned char* output_data,
 template <typename T>
 void CUDA_quantize_Norm(unsigned char* input_data, unsigned char* output_data,
                         unsigned char* feedback, T* levels, int num_elems,
-                        int bits, int bucket_size, CurandState* states,
+                        int bits, int bucket_size, GPURandState* states,
                         NormType norm_type, LevelsType levels_type,
                         cudaStream_t stream) {
   int num_blocks =
@@ -782,7 +809,7 @@ void CUDA_dequantize_maxmin(unsigned char* input_data,
   unsigned char* input = input_data + 2 * sizeof(T) * num_buckets;
   int num_threads = THREADS_PER_BLOCK_DECOMPRESS;
   int num_blocks = BLOCKS_PER_GRID(num_elems / PACK_SIZE, num_threads);
-  DEQUANTIZE<T, CompressFunc::MaxMin, ADD>(input, meta_info, output, num_elems,
+  DEQUANTIZE<T, CompressFunc::MaxMinWide, ADD>(input, meta_info, output, num_elems,
                                            bucket_size, bits, stream, NULL,
                                            num_blocks, num_threads);
 }
@@ -813,13 +840,13 @@ template void CUDA_quantize_maxmin<float>(unsigned char* input_data,
                                           unsigned char* output_data,
                                           unsigned char* feedback_data,
                                           int num_elems, int bits,
-                                          int bucket_size, CurandState* states,
+                                          int bucket_size, GPURandState* states,
                                           cudaStream_t stream);
 template void CUDA_quantize_maxmin<Half>(unsigned char* input_data,
                                          unsigned char* output_data,
                                          unsigned char* feedback_data,
                                          int num_elems, int bits,
-                                         int bucket_size, CurandState* states,
+                                         int bucket_size, GPURandState* states,
                                          cudaStream_t stream);
 
 template void CUDA_dequantize_maxmin<float, true>(unsigned char* input_data,
@@ -847,7 +874,7 @@ template void CUDA_dequantize_maxmin<Half, false>(unsigned char* input_data,
 template void
 CUDA_quantize_Norm<float>(unsigned char* input_data, unsigned char* output_data,
                           unsigned char* feedback, float* levels, int num_elems,
-                          int bits, int bucket_size, CurandState* states,
+                          int bits, int bucket_size, GPURandState* states,
                           NormType norm_type, LevelsType levels_type,
                           cudaStream_t stream);
 
@@ -855,7 +882,7 @@ template void CUDA_quantize_Norm<Half>(unsigned char* input_data,
                                        unsigned char* output_data,
                                        unsigned char* feedback, Half* levels,
                                        int num_elems, int bits, int bucket_size,
-                                       CurandState* states, NormType norm_type,
+                                       GPURandState* states, NormType norm_type,
                                        LevelsType levels_type,
                                        cudaStream_t stream);
 template void CUDA_dequantize_Norm<float, true>(unsigned char* input_data,
@@ -886,8 +913,8 @@ template void CUDA_dequantize_Norm<Half, false>(unsigned char* input_data,
                                                 LevelsType levels_type,
                                                 cudaStream_t stream);
 
-} // namespace cuda
+} // namespace gpu
 } // namespace common
 } // namespace horovod
 
-#include "topk_compression.cu"
+#include "cuda_topk_compression.cu"

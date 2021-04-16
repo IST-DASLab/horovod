@@ -95,12 +95,12 @@ Status MPI_Allreduce_PS::AllreduceDivision(
     // Broadcast the result
     compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
                           global_offset, num_elements, true, &stream);
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    gpu_context_->StreamSynchronize(stream);
   } else {
     send_rcv_size = ALIGNED_SIZE(
         compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
                               global_offset, num_elements, false, &stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    gpu_context_->StreamSynchronize(stream);
     MPI_CHECK(MPI_Send(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, 0,
                        comm_));
   }
@@ -108,7 +108,7 @@ Status MPI_Allreduce_PS::AllreduceDivision(
       MPI_Bcast(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR, 0, comm_));
   compressor_->Decompress(gradients_send_, buffer_ptr, entries, 0, num_elements,
                           false, &stream);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
+  gpu_context_->StreamSynchronize(stream);
   return Status::OK();
 }
 

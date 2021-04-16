@@ -95,7 +95,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
     send_buf += send_compressed_size;
     send_sizes.push(send_compressed_size);
   }
-  CUDA_CHECK(cudaStreamSynchronize(stream));
+  gpu_context_->StreamSynchronize(stream);
   timeline.ActivityEndAll(entries);
 
   send_buf = gradients_send_;
@@ -141,7 +141,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
 
   compressor_->Compress(buffer_ptr, gradients_send_, entries, start_elem,
                         global_offset, recv_num_elems, true, &stream);
-  cudaStreamSynchronize(stream);
+  gpu_context_->StreamSynchronize(stream);
   compressor_->Decompress(gradients_send_, buffer_ptr, entries, start_elem,
                           recv_num_elems, false, &stream);
   recv_buf = gradients_recv_;
@@ -190,7 +190,7 @@ Status MPI_Allreduce_ScatterReduceAllgather::AllreduceDivision(
   timeline.ActivityEndAll(entries);
   MPI_CHECK(MPI_Waitall((int)send_requests.size(), send_requests.data(),
                         MPI_STATUSES_IGNORE));
-  CUDA_CHECK(cudaStreamSynchronize(stream));
+  gpu_context_->StreamSynchronize(stream);
   return Status::OK();
 }
 

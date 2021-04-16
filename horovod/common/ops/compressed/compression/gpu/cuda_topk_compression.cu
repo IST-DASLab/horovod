@@ -1,5 +1,5 @@
 #include "cuda_compression_functions.h"
-#include "cuda_fp16_util.h"
+#include "fp16_util.h"
 
 #include <thrust/device_ptr.h>
 #include <thrust/functional.h>
@@ -9,7 +9,7 @@
 #define MARK_VALUE (2<<31 - 1)
 namespace horovod {
 namespace common {
-namespace cuda {
+namespace gpu {
 
 template <typename T>
 __global__ void find_stats(T* input, T* stats, int num_elems) {
@@ -342,8 +342,6 @@ void CUDA_topk_decompress(unsigned char* input_data, unsigned char* output_data,
 //         num_result, num_elems, 1.0 * non_zeros / num_elems);
 }
 
-size_t CUDA_get_topk_utility_buf_size() { return sizeof(float) * 2; }
-
 template void CUDA_topk_compress<float>(unsigned char* input_data,
                                         unsigned char* output_data,
                                         unsigned char* utility_buf,
@@ -378,6 +376,6 @@ template void CUDA_topk_decompress<Half, false>(unsigned char* input_data,
                                                 int num_elems, int num_result,
                                                 cudaStream_t stream);
 
-} // namespace cuda
+} // namespace gpu
 } // namespace common
 } // namespace horovod

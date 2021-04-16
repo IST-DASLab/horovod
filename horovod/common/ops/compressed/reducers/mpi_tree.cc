@@ -78,7 +78,7 @@ Status MPI_Allreduce_Tree::AllreduceDivision(
       peer_rank = rank - shift / 2;
       compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
                             global_offset, num_elements, false, &stream);
-      CUDA_CHECK(cudaStreamSynchronize(stream));
+      gpu_context_->StreamSynchronize(stream);
       MPI_CHECK(MPI_Send(gradients_send_, send_rcv_size, MPI_UNSIGNED_CHAR,
                          peer_rank, 0, comm_));
       break;
@@ -88,7 +88,7 @@ Status MPI_Allreduce_Tree::AllreduceDivision(
   if (rank == 0) {
     compressor_->Compress(buffer_ptr, gradients_send_, entries, 0,
                           global_offset, num_elements, false, &stream);
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    gpu_context_->StreamSynchronize(stream);
   }
   // Second round. Top-down. Propagate reduced values.
   while (shift > 1) {
@@ -108,7 +108,7 @@ Status MPI_Allreduce_Tree::AllreduceDivision(
   }
   compressor_->Decompress(gradients_send_, buffer_ptr, entries, 0, num_elements,
                           false, &stream);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
+  gpu_context_->StreamSynchronize(stream);
   return Status::OK();
 }
 

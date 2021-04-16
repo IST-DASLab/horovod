@@ -88,7 +88,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
     send_size = ALIGNED_SIZE(compressor_->Compress(
         buffer_ptr, gradients_send_, entries, buf_send_idx, global_offset,
         chunk_sizes[send_segment_idx], false, &stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    gpu_context_->StreamSynchronize(stream);
     MPI_CHECK(MPI_Send(gradients_send_, send_size, MPI_UNSIGNED_CHAR, send_to,
                        0, comm_));
 
@@ -109,7 +109,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
                           chunk_sizes[send_segment_idx], false, (void*)&stream);
   unsigned char* recv_buf = send_buf + send_size;
   unsigned char* compressed_buf = recv_buf;
-  CUDA_CHECK(cudaStreamSynchronize(stream));
+  gpu_context_->StreamSynchronize(stream);
   // Propagate reduced and compressed chunks without decompression.
   for (int i = 0; i < world_size - 1; i++) {
     recv_segment_idx = (rank - i + world_size) % world_size;
@@ -138,7 +138,7 @@ Status MPI_Allreduce_Ring::AllreduceDivision(
         chunk_sizes[recv_segment_idx], entries, buf_recv_idx));
     compressed_buf += recv_size;
   }
-  CUDA_CHECK(cudaStreamSynchronize(stream));
+  gpu_context_->StreamSynchronize(stream);
   return Status::OK();
 }
 

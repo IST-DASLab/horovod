@@ -1,10 +1,14 @@
 #ifndef HOROVOD_CUDA_FP16_UTIL_H
 #define HOROVOD_CUDA_FP16_UTIL_H
+#if HAVE_CUDA
 #include <cuda_fp16.h>
+#elif HAVE_ROCM
+#include <hip_fp16.h>
+#endif
 
 namespace horovod {
 namespace common {
-namespace cuda {
+namespace gpu {
 
 __device__ __half habs(__half a) {
   return __hlt(a, (__half)(-EPS)) ? __hneg(a) : a;
@@ -194,15 +198,7 @@ __device__ inline bool isnan(__half a) {
   return __hisnan(a);
 }
 
-__global__ void float2half(float* input, __half* output, int numel) {
-  int index = blockIdx.x * blockDim.x + threadIdx.x;
-  int stride = blockDim.x * gridDim.x;
-  for (int i = index; i < numel; i += stride) {
-    output[i] = __float2half(input[i]);
-  }
-}
-
-} // namespace cuda
+} // namespace gpu
 } // namespace common
 } // namespace horovod
 #endif // HOROVOD_CUDA_FP16_UTIL_H

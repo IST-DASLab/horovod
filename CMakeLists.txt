@@ -149,7 +149,6 @@ if ("$ENV{HOROVOD_GRAD_COMPRESSION}" STREQUAL "1")
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/p2p_comm.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/reducers/shm_utils.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/compressor.cc"
-            "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/common.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/error_feedback.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/vector_operations.cc"
             "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/feedback_buffer_manager.cc"
@@ -171,6 +170,8 @@ macro(ADD_CUDA)
     list(APPEND LINKER_LIBS cuda)
     list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/cuda_operations.cc"
                         "${PROJECT_SOURCE_DIR}/horovod/common/ops/gpu_operations.cc")
+    add_definitions(-DHAVE_CUDA=1 -DHAVE_GPU=1)
+    set(HAVE_CUDA TRUE)
     # CUDA + MPI
     if(HAVE_MPI)
         list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/mpi_gpu_operations.cc")
@@ -189,8 +190,6 @@ macro(ADD_CUDA)
                 )
         endif()
     endif()
-    add_definitions(-DHAVE_CUDA=1 -DHAVE_GPU=1)
-    set(HAVE_CUDA TRUE)
     if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         set(HAVE_SUB_PROJECT_CUDA TRUE PARENT_SCOPE)
     endif()
@@ -208,6 +207,23 @@ if(DEFINED HOROVOD_GPU_ALLREDUCE OR DEFINED HOROVOD_GPU_ALLGATHER OR DEFINED HOR
                             "${PROJECT_SOURCE_DIR}/horovod/common/ops/gpu_operations.cc")
         add_definitions(-DHAVE_ROCM=1 -DHAVE_GPU=1)
         set(HAVE_ROCM TRUE)
+        if(HAVE_MPI)
+            list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/mpi_gpu_operations.cc")
+            if (GRAD_COMPRESSION)
+                set(LIBYAML_PATH $ENV{HOROVOD_YAML_HOME})
+                include_directories(${LIBYAML_PATH}/include)
+                link_directories(${LIBYAML_PATH}/lib)
+                list(APPEND LINKER_LIBS yaml)
+                if (Pytorch_CXX11)
+                    list(APPEND PYTORCH_LINKER_LIBS horovod_hip_compression_kernels)
+                else()
+                    list(APPEND PYTORCH_LINKER_LIBS compatible_horovod_hip_compression_kernels)
+                endif()
+                list(APPEND SOURCES "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/mpi_gpu_compressed_operations.cc"
+                        "${PROJECT_SOURCE_DIR}/horovod/common/ops/compressed/compression/gpu_compressor.cc"
+                        )
+            endif()
+        endif()
     else()
         message(FATAL_ERROR "Unknown HOROVOD_GPU type: ${HOROVOD_GPU}")
     endif()
@@ -334,7 +350,13 @@ add_subdirectory(horovod/mxnet)
 if(HAVE_CUDA OR HAVE_SUB_PROJECT_CUDA)
     add_subdirectory(horovod/common/ops/cuda)
     if (GRAD_COMPRESSION)
-        add_subdirectory(horovod/common/ops/compressed/compression/cuda)
+        add_subdirectory(horovod/common/ops/compressed/compression/gpu)
+    endif()
+endif()
+
+if(HAVE_ROCM)
+    if (GRAD_COMPRESSION)
+        add_subdirectory(horovod/common/ops/compressed/compression/gpu)
     endif()
 endif()
 

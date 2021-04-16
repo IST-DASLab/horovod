@@ -24,6 +24,7 @@
 #include <unordered_map>
 
 #include "message.h"
+#include "ops/compressed/common.h"
 
 namespace horovod {
 namespace common {
@@ -134,38 +135,6 @@ enum Communicator {
   CROSS = 2
 };
 
-enum CommunicatorType {
-  MPI,
-  NCCL,
-  SHM,
-  P2P
-};
-
-enum ReductionType {
-  AllGather,
-  ScatterAllgather,
-  Ring,
-  PS,
-  Tree,
-  NoneReduction
-};
-
-enum CompressionType {
-  MaxMin,
-  Uni,
-  Exp,
-  TopK,
-  NoneCompression
-};
-
-enum NormType { L2, Linf };
-enum LevelsType { Pos, Wide };
-
-enum CompressionMode {
-  NonFused,
-  PerEntryFused,
-  Fused
-};
 
 inline std::string CommunicatorName(Communicator comm) {
   switch (comm) {

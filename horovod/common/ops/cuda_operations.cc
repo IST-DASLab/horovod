@@ -146,7 +146,9 @@ public:
   void MemcpyAsyncD2H(void* dst, const void* src, size_t count, cudaStream_t stream) {
     ErrorCheck("cudaMemcpyAsync", cudaMemcpyAsync(dst, src, count, cudaMemcpyDeviceToHost, stream));
   }
-
+  void Malloc(void** dst, size_t count) {
+    ErrorCheck("cudaMalloc", cudaMalloc(dst, count));
+  }
   void ScaleBufferImpl(const void* fused_input_data, void* buffer_data, int64_t num_elements,
                        double scale_factor, DataType dtype, cudaStream_t stream) {
     ScaleBufferCudaImpl(fused_input_data, buffer_data, num_elements, scale_factor, dtype, stream);

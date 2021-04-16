@@ -1,5 +1,5 @@
 #include "vector_operations.h"
-#include "cuda/cuda_arithmetic_functions.h"
+#include "gpu/compression_functions.h"
 #include <omp.h>
 #include <stdexcept>
 
@@ -17,13 +17,13 @@ void CPUSummator::Add(Half* x, Half* y, Half* sum, int num_elems) {
 }
 
 void GPUSummator::Add(float* x, float* y, float* sum, int num_elems) {
-  cuda::CUDA_add<float>(
+  gpu::GPU_add<float>(
       num_elems, x, y, sum,
       gpu_context_->streams[global_state_->current_nccl_stream][device_]);
 }
 
 void GPUSummator::Add(Half* x, Half* y, Half* sum, int num_elems) {
-  cuda::CUDA_add<Half>(
+  gpu::GPU_add<Half>(
       num_elems, x, y, sum,
       gpu_context_->streams[global_state_->current_nccl_stream][device_]);
 }

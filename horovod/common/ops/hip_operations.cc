@@ -145,7 +145,9 @@ public:
   void MemcpyAsyncD2H(void* dst, const void* src, size_t count, hipStream_t stream) {
     ErrorCheck("hipMemcpyAsync", hipMemcpyAsync(dst, src, count, hipMemcpyDeviceToHost, stream));
   }
-
+  void Malloc(void** dst, size_t count) {
+    ErrorCheck("hipMalloc", hipMalloc(dst, count));
+  }
   void ScaleBufferImpl(const void* fused_input_data, void* buffer_data, int64_t num_elements,
                    double scale_factor, DataType dtype, hipStream_t stream) {
     throw std::logic_error("ScaleBuffer not implemented for AMD GPUs.");

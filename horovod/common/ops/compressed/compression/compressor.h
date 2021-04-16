@@ -1,7 +1,7 @@
 #ifndef HOROVOD_COMPRESSOR_H
 #define HOROVOD_COMPRESSOR_H
 
-#include "../../../common.h"
+#include "../common.h"
 #include "error_feedback.h"
 #include <map>
 #include <vector>

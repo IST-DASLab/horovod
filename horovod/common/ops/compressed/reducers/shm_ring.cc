@@ -112,8 +112,7 @@ Status SHM_Allreduce_Ring::AllreduceDivision(
     agg_send_offset += send_size;
     hcomm_->RecvBuf(&peer_buf, recv_from, stream, agg_recv_offset);
     agg_recv_offset += recv_size;
-    CUDA_CHECK(cudaMemcpyAsync(gradients_recv_, peer_buf, recv_size,
-                               cudaMemcpyDeviceToDevice, stream));
+    gpu_context_->MemcpyAsyncD2D(gradients_recv_, peer_buf, recv_size, stream);
     compressor_->Decompress(gradients_recv_, buffer_ptr, entries, buf_recv_idx,
                             chunk_sizes[recv_segment_idx], true, &stream);
   }
@@ -139,14 +138,13 @@ Status SHM_Allreduce_Ring::AllreduceDivision(
     agg_send_offset += send_size;
     hcomm_->RecvBuf(&peer_buf, recv_from, stream, agg_recv_offset);
     agg_recv_offset += recv_size;
-    CUDA_CHECK(cudaMemcpyAsync(gradients_send_, peer_buf, recv_size,
-                               cudaMemcpyDeviceToDevice, stream));
+    gpu_context_->MemcpyAsyncD2D(gradients_send_, peer_buf, recv_size, stream);
     compressor_->Decompress(gradients_send_, buffer_ptr, entries, buf_recv_idx,
                             chunk_sizes[recv_segment_idx], false, &stream);
     send_size = recv_size;
   }
   hcomm_->WaitSendAll();
-  CUDA_CHECK(cudaStreamSynchronize(stream));
+  gpu_context_->StreamSynchronize(stream);
   return Status::OK();
 }
 

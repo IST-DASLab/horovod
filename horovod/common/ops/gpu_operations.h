@@ -83,7 +83,7 @@ public:
   void MemcpyAsyncD2D(void* dst, const void* src, size_t count, gpuStream_t stream);
   void MemcpyAsyncH2D(void* dst, const void* src, size_t count, gpuStream_t stream);
   void MemcpyAsyncD2H(void* dst, const void* src, size_t count, gpuStream_t stream);
-
+  void Malloc(void** dst, size_t count);
   void ScaleBufferImpl(const void* fused_input_data, void* buffer_data, int64_t num_elements,
                        double scale_factor, DataType dtype, gpuStream_t stream);
 
